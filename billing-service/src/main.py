@@ -1,3 +1,7 @@
+from contextlib import asynccontextmanager
+from decimal import Decimal
+import logging
+import threading
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -5,11 +9,58 @@ from pydantic import BaseModel
 
 from .config import settings
 from .logging_config import configure_logging
+from .messaging import build_message, consume_messages, publish_message
 from .payment import get_payment_facade
 
 configure_logging()
+logger = logging.getLogger(__name__)
+stop_consumer_event = threading.Event()
+consumer_thread: threading.Thread | None = None
 
-app = FastAPI(title="Billing Service API", version="0.1.0")
+
+def handle_billing_message(message: dict) -> None:
+    if message["type"] != "billing.payment.requested":
+        return
+    payload = message.get("payload", {})
+    provider = payload.get("provider") or settings.payment_provider
+    facade = get_payment_facade(provider)
+    result = facade.charge(payload["orderId"], Decimal(payload["amount"]), payload["currency"])
+    event_type = "billing.payment.succeeded"
+    event_payload = {
+        "orderId": payload["orderId"],
+        "transactionId": result.transaction_id,
+        "provider": result.provider,
+        "amount": payload["amount"],
+        "currency": payload["currency"],
+        "paymentStatus": result.status.value,
+    }
+    event = build_message(
+        event_type,
+        message["correlationId"],
+        event_payload,
+        previous_event_id=message["messageId"],
+    )
+    publish_message(event_type, event)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global consumer_thread
+    stop_consumer_event.clear()
+    consumer_thread = threading.Thread(
+        target=consume_messages,
+        args=(["billing.payment.requested"], handle_billing_message, stop_consumer_event),
+        daemon=True,
+    )
+    consumer_thread.start()
+    logger.info("Billing command consumer started")
+    yield
+    stop_consumer_event.set()
+    if consumer_thread:
+        consumer_thread.join(timeout=3)
+
+
+app = FastAPI(title="Billing Service API", version="0.1.0", lifespan=lifespan)
 
 
 class HealthResponse(BaseModel):

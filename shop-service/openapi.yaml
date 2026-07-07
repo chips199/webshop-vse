@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
-  title: Shop Service API
+  title: Historical Computer Parts Shop Service API
   version: 0.1.0
-  description: External order API for the online shop.
+  description: External order API for a shop selling historical computer parts.
 servers:
   - url: http://localhost:8000
 paths:
@@ -128,6 +128,7 @@ components:
         productId:
           type: string
           format: uuid
+          example: 22222222-2222-2222-2222-222222222222
         quantity:
           type: integer
           minimum: 1
@@ -153,7 +154,25 @@ components:
           format: uuid
         status:
           type: string
-          enum: [PENDING, COMPLETED, OUT_OF_STOCK, PAYMENT_FAILED, ROLLBACK_COMPLETED]
+          enum:
+            - PENDING
+            - RESERVED
+            - PAYMENT_PENDING
+            - PAYMENT_SUCCEEDED
+            - INVOICE_RETRY_PENDING
+            - WAREHOUSE_COMMIT_FAILED
+            - COMPLETED
+            - OUT_OF_STOCK
+            - PAYMENT_FAILED
+            - ROLLBACK_COMPLETED
+        amount:
+          type: string
+          nullable: true
+          example: "149.90"
+        currency:
+          type: string
+          nullable: true
+          example: EUR
     ProblemDetails:
       type: object
       required: [type, title, status]
