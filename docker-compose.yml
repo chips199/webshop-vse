@@ -1,0 +1,109 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: webshop
+      POSTGRES_USER: webshop
+      POSTGRES_PASSWORD: webshop
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U webshop -d webshop"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: webshop
+      RABBITMQ_DEFAULT_PASS: webshop
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  shop-service:
+    build: ./shop-service
+    environment:
+      SERVICE_NAME: shop-service
+      SERVICE_PORT: 8000
+      DATABASE_URL: postgresql://webshop:webshop@postgres:5432/webshop
+      RABBITMQ_URL: amqp://webshop:webshop@rabbitmq:5672/
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  warehouse-service:
+    build: ./warehouse-service
+    environment:
+      SERVICE_NAME: warehouse-service
+      SERVICE_PORT: 8001
+      DATABASE_URL: postgresql://webshop:webshop@postgres:5432/webshop
+      RABBITMQ_URL: amqp://webshop:webshop@rabbitmq:5672/
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  billing-service:
+    build: ./billing-service
+    environment:
+      SERVICE_NAME: billing-service
+      SERVICE_PORT: 8002
+      DATABASE_URL: postgresql://webshop:webshop@postgres:5432/webshop
+      RABBITMQ_URL: amqp://webshop:webshop@rabbitmq:5672/
+      PAYMENT_PROVIDER: stripe
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  invoice-service:
+    build: ./invoice-service
+    environment:
+      SERVICE_NAME: invoice-service
+      SERVICE_PORT: 8003
+      DATABASE_URL: postgresql://webshop:webshop@postgres:5432/webshop
+      RABBITMQ_URL: amqp://webshop:webshop@rabbitmq:5672/
+    ports:
+      - "8003:8003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  audit-service:
+    build: ./audit-service
+    environment:
+      SERVICE_NAME: audit-service
+      SERVICE_PORT: 8004
+      DATABASE_URL: postgresql://webshop:webshop@postgres:5432/webshop
+      RABBITMQ_URL: amqp://webshop:webshop@rabbitmq:5672/
+    ports:
+      - "8004:8004"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
