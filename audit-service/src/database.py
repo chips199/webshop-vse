@@ -3,6 +3,7 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from .config import settings
 
@@ -53,3 +54,48 @@ def get_snapshots_by_correlation_id(correlation_id: str) -> Iterable[dict[str, A
         with connection.cursor() as cursor:
             cursor.execute(query, (correlation_id,))
             return cursor.fetchall()
+
+
+def insert_snapshot_from_message(message: dict[str, Any]) -> None:
+    query = """
+    INSERT INTO audit_snapshots (
+        id,
+        correlation_id,
+        event_type,
+        service,
+        timestamp,
+        payload,
+        previous_event_id,
+        actor,
+        status_code
+    )
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    ON CONFLICT (id) DO NOTHING;
+    """
+    message_type = message["type"]
+    with psycopg.connect(settings.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                query,
+                (
+                    message["messageId"],
+                    message["correlationId"],
+                    message_type.upper().replace(".", "_"),
+                    message["sourceService"],
+                    message["timestamp"],
+                    Jsonb(message.get("payload", {})),
+                    message.get("previousEventId"),
+                    message["sourceService"],
+                    _status_code_for(message_type),
+                ),
+            )
+
+
+def _status_code_for(message_type: str) -> str:
+    if ".failed" in message_type:
+        return "FAILURE"
+    if ".cancel." in message_type or ".refund." in message_type:
+        return "COMPENSATING"
+    if "rollback.completed" in message_type:
+        return "COMPENSATED"
+    return "SUCCESS"

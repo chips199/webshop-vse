@@ -1,7 +1,7 @@
 # Billing Service
 
 FastAPI service for payment processing through a payment facade. PayPal and
-Stripe stubs will be implemented behind the facade in a later phase.
+Stripe stubs are available behind the facade as deterministic test adapters.
 
 ## Local endpoints
 
@@ -15,3 +15,9 @@ Stripe stubs will be implemented behind the facade in a later phase.
 - `DATABASE_URL`
 - `RABBITMQ_URL`
 - `PAYMENT_PROVIDER`
+
+## Tests
+
+```bash
+python -m unittest discover tests
+```

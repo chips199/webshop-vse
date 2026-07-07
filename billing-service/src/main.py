@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from .config import settings
 from .logging_config import configure_logging
+from .payment import get_payment_facade
 
 configure_logging()
 
@@ -38,4 +39,10 @@ async def health() -> HealthResponse:
 
 @app.get("/payments/{transactionId}/status", response_model=PaymentStatusResponse)
 async def get_payment_status(transactionId: str) -> PaymentStatusResponse:
-    raise HTTPException(status_code=404, detail=f"Transaction {transactionId} not found")
+    facade = get_payment_facade(settings.payment_provider)
+    result = facade.get_status(transactionId)
+    return PaymentStatusResponse(
+        transactionId=result.transaction_id,
+        provider=result.provider,
+        status=result.status.value,
+    )

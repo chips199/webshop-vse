@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from .config import settings
 from .logging_config import configure_logging
+from .messaging import build_message, publish_message
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -58,6 +59,30 @@ async def health() -> HealthResponse:
 async def create_order(request: Request, order: CreateOrderRequest) -> OrderResponse:
     correlation_id = request.state.correlation_id
     order_id = str(uuid4())
+    order_created = build_message(
+        "order.created",
+        correlation_id,
+        {
+            "orderId": order_id,
+            "customerId": order.customerId,
+            "items": [item.model_dump() for item in order.items],
+            "payment": order.payment.model_dump(),
+            "status": "PENDING",
+        },
+    )
+    publish_message("order.created", order_created)
+
+    reserve_requested = build_message(
+        "warehouse.reserve.requested",
+        correlation_id,
+        {
+            "orderId": order_id,
+            "items": [item.model_dump() for item in order.items],
+        },
+        previous_event_id=order_created["messageId"],
+    )
+    publish_message("warehouse.reserve.requested", reserve_requested)
+
     logger.info(
         "Order accepted for asynchronous processing",
         extra={

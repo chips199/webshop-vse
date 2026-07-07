@@ -27,3 +27,4 @@ def configure_logging() -> None:
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(logging.INFO)
+    logging.getLogger("pika").setLevel(logging.WARNING)

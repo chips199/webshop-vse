@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
 from datetime import datetime
+import logging
+import threading
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -7,16 +9,32 @@ from fastapi import FastAPI, Request, Response
 from pydantic import BaseModel
 
 from .config import settings
-from .database import get_snapshots_by_correlation_id, init_database
+from .database import get_snapshots_by_correlation_id, init_database, insert_snapshot_from_message
 from .logging_config import configure_logging
+from .messaging import consume_audit_events
 
 configure_logging()
+logger = logging.getLogger(__name__)
+stop_consumer_event = threading.Event()
+consumer_thread: threading.Thread | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global consumer_thread
     init_database()
+    stop_consumer_event.clear()
+    consumer_thread = threading.Thread(
+        target=consume_audit_events,
+        args=(insert_snapshot_from_message, stop_consumer_event),
+        daemon=True,
+    )
+    consumer_thread.start()
+    logger.info("Audit event consumer started")
     yield
+    stop_consumer_event.set()
+    if consumer_thread:
+        consumer_thread.join(timeout=3)
 
 
 app = FastAPI(title="Audit Service API", version="0.1.0", lifespan=lifespan)
