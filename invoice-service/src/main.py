@@ -23,6 +23,39 @@ def handle_invoice_message(message: dict) -> None:
     if message["type"] != "invoice.create.requested":
         return
     payload = message.get("payload", {})
+    if payload.get("scenario") == "invoice_failed":
+        previous_event_id = message["messageId"]
+        for attempt in range(1, 4):
+            retry_event = build_message(
+                "invoice.retry.scheduled",
+                message["correlationId"],
+                {
+                    "orderId": payload["orderId"],
+                    "transactionId": payload["transactionId"],
+                    "attempt": attempt,
+                    "maxAttempts": 3,
+                    "reasonCode": "INVOICE_RENDER_FAILED",
+                    "message": "Rechnungsdatei konnte im Stub nicht erzeugt werden.",
+                },
+                previous_event_id=previous_event_id,
+            )
+            publish_message("invoice.retry.scheduled", retry_event)
+            previous_event_id = retry_event["messageId"]
+
+        failed_event = build_message(
+            "invoice.failed",
+            message["correlationId"],
+            {
+                "orderId": payload["orderId"],
+                "transactionId": payload["transactionId"],
+                "reasonCode": "INVOICE_RENDER_FAILED",
+                "message": "Rechnungserstellung nach drei Versuchen fehlgeschlagen.",
+            },
+            previous_event_id=previous_event_id,
+        )
+        publish_message("invoice.failed", failed_event)
+        return
+
     invoice_id = str(uuid4())
     invoice_dir.mkdir(parents=True, exist_ok=True)
     invoice_path = invoice_dir / f"{invoice_id}.txt"

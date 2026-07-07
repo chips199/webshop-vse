@@ -19,9 +19,49 @@ consumer_thread: threading.Thread | None = None
 
 
 def handle_billing_message(message: dict) -> None:
+    if message["type"] == "billing.refund.requested":
+        payload = message.get("payload", {})
+        provider = payload.get("provider") or settings.payment_provider
+        facade = get_payment_facade(provider)
+        result = facade.refund(payload["transactionId"], Decimal(payload["amount"]))
+        event = build_message(
+            "billing.refund.succeeded",
+            message["correlationId"],
+            {
+                "orderId": payload["orderId"],
+                "transactionId": result.transaction_id,
+                "provider": result.provider,
+                "amount": payload["amount"],
+                "currency": payload["currency"],
+                "refundStatus": result.status.value,
+            },
+            previous_event_id=message["messageId"],
+        )
+        publish_message("billing.refund.succeeded", event)
+        return
+
     if message["type"] != "billing.payment.requested":
         return
     payload = message.get("payload", {})
+    scenario = payload.get("scenario", "happy_path")
+    if scenario in {"payment_failed", "payment_timeout"}:
+        reason_code = "PAYMENT_TIMEOUT" if scenario == "payment_timeout" else "PAYMENT_DECLINED"
+        event = build_message(
+            "billing.payment.failed",
+            message["correlationId"],
+            {
+                "orderId": payload["orderId"],
+                "provider": payload.get("provider") or settings.payment_provider,
+                "amount": payload["amount"],
+                "currency": payload["currency"],
+                "reasonCode": reason_code,
+                "message": "Payment-Stub simuliert eine fehlgeschlagene Zahlung.",
+            },
+            previous_event_id=message["messageId"],
+        )
+        publish_message("billing.payment.failed", event)
+        return
+
     provider = payload.get("provider") or settings.payment_provider
     facade = get_payment_facade(provider)
     result = facade.charge(payload["orderId"], Decimal(payload["amount"]), payload["currency"])
@@ -32,6 +72,7 @@ def handle_billing_message(message: dict) -> None:
         "provider": result.provider,
         "amount": payload["amount"],
         "currency": payload["currency"],
+        "scenario": scenario,
         "paymentStatus": result.status.value,
     }
     event = build_message(
@@ -49,7 +90,7 @@ async def lifespan(app: FastAPI):
     stop_consumer_event.clear()
     consumer_thread = threading.Thread(
         target=consume_messages,
-        args=(["billing.payment.requested"], handle_billing_message, stop_consumer_event),
+        args=(["billing.payment.requested", "billing.refund.requested"], handle_billing_message, stop_consumer_event),
         daemon=True,
     )
     consumer_thread.start()

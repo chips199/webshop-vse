@@ -94,6 +94,8 @@ def insert_snapshot_from_message(message: dict[str, Any]) -> None:
 def _status_code_for(message_type: str) -> str:
     if ".failed" in message_type:
         return "FAILURE"
+    if ".retry." in message_type:
+        return "RETRY"
     if ".cancel." in message_type or ".refund." in message_type:
         return "COMPENSATING"
     if "rollback.completed" in message_type:

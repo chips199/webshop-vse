@@ -17,14 +17,51 @@ consumer_thread: threading.Thread | None = None
 
 
 def handle_warehouse_message(message: dict) -> None:
+    if message["type"] == "warehouse.cancel.requested":
+        payload = message.get("payload", {})
+        event = build_message(
+            "warehouse.cancel.succeeded",
+            message["correlationId"],
+            {
+                "orderId": payload["orderId"],
+                "cancelStatus": "SUCCEEDED",
+                "reasonCode": payload.get("reasonCode", "CANCEL_REQUESTED"),
+            },
+            previous_event_id=message["messageId"],
+        )
+        publish_message("warehouse.cancel.succeeded", event)
+        return
+
     if message["type"] == "warehouse.commit.requested":
         payload = message.get("payload", {})
+        scenario = payload.get("scenario", "happy_path")
+        if scenario == "warehouse_commit_failed":
+            event = build_message(
+                "warehouse.commit.failed",
+                message["correlationId"],
+                {
+                    "orderId": payload["orderId"],
+                    "transactionId": payload["transactionId"],
+                    "provider": payload["provider"],
+                    "amount": payload["amount"],
+                    "currency": payload["currency"],
+                    "reasonCode": "WAREHOUSE_COMMIT_FAILED",
+                    "message": "Reservierung konnte nach erfolgreicher Zahlung nicht final verbucht werden.",
+                },
+                previous_event_id=message["messageId"],
+            )
+            publish_message("warehouse.commit.failed", event)
+            return
+
         event = build_message(
             "warehouse.commit.succeeded",
             message["correlationId"],
             {
                 "orderId": payload["orderId"],
                 "transactionId": payload["transactionId"],
+                "provider": payload["provider"],
+                "amount": payload["amount"],
+                "currency": payload["currency"],
                 "commitStatus": "SUCCEEDED",
             },
             previous_event_id=message["messageId"],
@@ -37,7 +74,8 @@ def handle_warehouse_message(message: dict) -> None:
     payload = message.get("payload", {})
     order_id = payload["orderId"]
     items = payload.get("items", [])
-    has_stock = all(int(item.get("quantity", 0)) > 0 for item in items)
+    scenario = payload.get("scenario", "happy_path")
+    has_stock = scenario != "out_of_stock" and all(int(item.get("quantity", 0)) > 0 for item in items)
 
     if has_stock:
         event_type = "warehouse.reservation.succeeded"
@@ -48,6 +86,7 @@ def handle_warehouse_message(message: dict) -> None:
             "amount": payload["amount"],
             "currency": payload["currency"],
             "provider": payload["provider"],
+            "scenario": scenario,
         }
     else:
         event_type = "warehouse.reservation.failed"
@@ -55,6 +94,7 @@ def handle_warehouse_message(message: dict) -> None:
             "orderId": order_id,
             "reasonCode": "OUT_OF_STOCK",
             "message": "Mindestens ein historisches Computerteil ist nicht verfuegbar.",
+            "items": items,
         }
 
     event = build_message(
@@ -73,7 +113,7 @@ async def lifespan(app: FastAPI):
     consumer_thread = threading.Thread(
         target=consume_messages,
         args=(
-            ["warehouse.reserve.requested", "warehouse.commit.requested"],
+            ["warehouse.reserve.requested", "warehouse.commit.requested", "warehouse.cancel.requested"],
             handle_warehouse_message,
             stop_consumer_event,
         ),

@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Cpu, Minus, Plus, ReceiptText, ShoppingCart, Terminal } from "lucide-react";
+import { Cpu, Minus, Plus, ReceiptText, ShoppingCart, Terminal, Zap } from "lucide-react";
 import "./styles.css";
 
 const SHOP_API = import.meta.env.VITE_SHOP_API_URL || "http://localhost:8000";
@@ -33,6 +33,14 @@ const products = [
   },
 ];
 
+const scenarios = [
+  { id: "happy_path", label: "Happy Path" },
+  { id: "out_of_stock", label: "Out of Stock" },
+  { id: "payment_failed", label: "Payment Fail" },
+  { id: "invoice_failed", label: "Invoice Fail" },
+  { id: "warehouse_commit_failed", label: "Refund Run" },
+];
+
 function formatPrice(value) {
   return `${value.toFixed(2)} EUR`;
 }
@@ -52,6 +60,7 @@ function PixelArt({ rows }) {
 function App() {
   const [cart, setCart] = useState({});
   const [provider, setProvider] = useState("stripe");
+  const [scenario, setScenario] = useState("happy_path");
   const [order, setOrder] = useState(null);
   const [timeline, setTimeline] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -109,7 +118,7 @@ function App() {
         body: JSON.stringify({
           customerId: "11111111-1111-1111-1111-111111111111",
           items: cartItems.map((item) => ({ productId: item.id, quantity: item.quantity })),
-          payment: { provider, currency: "EUR" },
+          payment: { provider, currency: "EUR", scenario },
         }),
       });
       if (!response.ok) {
@@ -197,6 +206,22 @@ function App() {
               <button className={provider === "paypal" ? "active" : ""} onClick={() => setProvider("paypal")}>
                 PayPal
               </button>
+            </div>
+          </div>
+
+          <div className="provider">
+            <span>Szenario</span>
+            <div className="scenario-grid">
+              {scenarios.map((entry) => (
+                <button
+                  key={entry.id}
+                  className={scenario === entry.id ? "active" : ""}
+                  onClick={() => setScenario(entry.id)}
+                >
+                  <Zap size={14} />
+                  {entry.label}
+                </button>
+              ))}
             </div>
           </div>
 

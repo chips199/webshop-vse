@@ -26,7 +26,7 @@ Alle Commands und Events verwenden denselben Envelope:
 | `warehouse.commit.requested` | Shop-Service | Warehouse-Service | Reservierte Artikel final ausbuchen |
 | `billing.payment.requested` | Shop-Service | Billing-Service | Zahlung ueber Payment-Fassade starten |
 | `billing.refund.requested` | Shop-Service | Billing-Service | Zahlung kompensierend erstatten |
-| `invoice.create.requested` | Billing-Service | Invoice-Service | Rechnung nach erfolgreicher Zahlung erstellen |
+| `invoice.create.requested` | Shop-Service | Invoice-Service | Rechnung nach erfolgreicher Zahlung erstellen |
 
 ## Events
 
@@ -42,6 +42,7 @@ Alle Commands und Events verwenden denselben Envelope:
 | `billing.refund.succeeded` | Billing-Service | Shop-Service, Audit-Service | Refund erfolgreich abgeschlossen |
 | `billing.refund.failed` | Billing-Service | Shop-Service, Audit-Service | Refund fehlgeschlagen |
 | `invoice.created` | Invoice-Service | Shop-Service, Audit-Service | Rechnung erfolgreich erstellt |
+| `invoice.retry.scheduled` | Invoice-Service | Audit-Service | Wiederholversuch fuer Rechnungserstellung vorgemerkt |
 | `invoice.failed` | Invoice-Service | Shop-Service, Audit-Service | Rechnungserstellung fehlgeschlagen |
 | `order.completed` | Shop-Service | Audit-Service | Bestellung erfolgreich abgeschlossen |
 | `order.rollback.completed` | Shop-Service | Audit-Service | Kompensation abgeschlossen |

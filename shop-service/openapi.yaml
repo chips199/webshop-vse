@@ -142,6 +142,17 @@ components:
         currency:
           type: string
           example: EUR
+        scenario:
+          type: string
+          description: Test scenario for demonstrable saga paths.
+          default: happy_path
+          enum:
+            - happy_path
+            - out_of_stock
+            - payment_failed
+            - payment_timeout
+            - invoice_failed
+            - warehouse_commit_failed
     OrderResponse:
       type: object
       required: [orderId, correlationId, status]
@@ -161,6 +172,8 @@ components:
             - PAYMENT_SUCCEEDED
             - INVOICE_RETRY_PENDING
             - WAREHOUSE_COMMIT_FAILED
+            - REFUND_PENDING
+            - REFUND_FAILED
             - COMPLETED
             - OUT_OF_STOCK
             - PAYMENT_FAILED

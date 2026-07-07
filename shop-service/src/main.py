@@ -39,6 +39,7 @@ def handle_saga_message(message: dict) -> None:
                 "amount": payload["amount"],
                 "currency": payload["currency"],
                 "provider": payload["provider"],
+                "scenario": payload.get("scenario", "happy_path"),
             },
             previous_event_id=message["messageId"],
         )
@@ -63,6 +64,7 @@ def handle_saga_message(message: dict) -> None:
                 "provider": payload["provider"],
                 "amount": payload["amount"],
                 "currency": payload["currency"],
+                "scenario": payload.get("scenario", "happy_path"),
             },
             previous_event_id=message["messageId"],
         )
@@ -74,6 +76,10 @@ def handle_saga_message(message: dict) -> None:
             {
                 "orderId": order_id,
                 "transactionId": payload["transactionId"],
+                "provider": payload["provider"],
+                "amount": payload["amount"],
+                "currency": payload["currency"],
+                "scenario": payload.get("scenario", "happy_path"),
             },
             previous_event_id=message["messageId"],
         )
@@ -81,6 +87,22 @@ def handle_saga_message(message: dict) -> None:
         return
 
     if message_type == "billing.payment.failed":
+        order_id = payload["orderId"]
+        update_order_status(order_id, "PAYMENT_FAILED")
+        cancel_requested = build_message(
+            "warehouse.cancel.requested",
+            correlation_id,
+            {
+                "orderId": order_id,
+                "reasonCode": payload.get("reasonCode", "PAYMENT_FAILED"),
+                "message": "Zahlung fehlgeschlagen, Warehouse-Reservierung wird storniert.",
+            },
+            previous_event_id=message["messageId"],
+        )
+        publish_message("warehouse.cancel.requested", cancel_requested)
+        return
+
+    if message_type == "warehouse.cancel.succeeded":
         update_order_status(payload["orderId"], "PAYMENT_FAILED")
         return
 
@@ -101,7 +123,42 @@ def handle_saga_message(message: dict) -> None:
         return
 
     if message_type == "warehouse.commit.failed":
-        update_order_status(payload["orderId"], "WAREHOUSE_COMMIT_FAILED")
+        order_id = payload["orderId"]
+        update_order_status(order_id, "REFUND_PENDING")
+        refund_requested = build_message(
+            "billing.refund.requested",
+            correlation_id,
+            {
+                "orderId": order_id,
+                "transactionId": payload["transactionId"],
+                "provider": payload["provider"],
+                "amount": payload["amount"],
+                "currency": payload["currency"],
+                "reasonCode": payload.get("reasonCode", "WAREHOUSE_COMMIT_FAILED"),
+            },
+            previous_event_id=message["messageId"],
+        )
+        publish_message("billing.refund.requested", refund_requested)
+        return
+
+    if message_type == "billing.refund.succeeded":
+        order_id = payload["orderId"]
+        update_order_status(order_id, "ROLLBACK_COMPLETED")
+        rollback_completed = build_message(
+            "order.rollback.completed",
+            correlation_id,
+            {
+                "orderId": order_id,
+                "status": "ROLLBACK_COMPLETED",
+                "transactionId": payload["transactionId"],
+            },
+            previous_event_id=message["messageId"],
+        )
+        publish_message("order.rollback.completed", rollback_completed)
+        return
+
+    if message_type == "billing.refund.failed":
+        update_order_status(payload["orderId"], "REFUND_FAILED")
 
 
 def maybe_publish_order_completed(order_id: str, correlation_id: str, previous_message: dict) -> None:
@@ -132,10 +189,13 @@ async def lifespan(app: FastAPI):
                 "warehouse.reservation.failed",
                 "billing.payment.succeeded",
                 "billing.payment.failed",
+                "billing.refund.succeeded",
+                "billing.refund.failed",
                 "invoice.created",
                 "invoice.failed",
                 "warehouse.commit.succeeded",
                 "warehouse.commit.failed",
+                "warehouse.cancel.succeeded",
             ],
             handle_saga_message,
             stop_consumer_event,
@@ -174,6 +234,7 @@ class OrderItem(BaseModel):
 class PaymentSelection(BaseModel):
     provider: str
     currency: str = "EUR"
+    scenario: str = "happy_path"
 
 
 class CreateOrderRequest(BaseModel):
@@ -246,6 +307,7 @@ async def create_order(request: Request, order: CreateOrderRequest) -> OrderResp
             "amount": str(amount),
             "currency": currency,
             "provider": order.payment.provider,
+            "scenario": order.payment.scenario,
         },
         previous_event_id=order_created["messageId"],
     )

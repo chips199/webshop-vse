@@ -163,6 +163,7 @@ h2 {
 
 .stepper button,
 .segments button,
+.scenario-grid button,
 .checkout-button {
   color: #baff6f;
   background: #0b2b0b;
@@ -172,6 +173,7 @@ h2 {
 
 .stepper button:hover,
 .segments button:hover,
+.scenario-grid button:hover,
 .checkout-button:hover {
   background: #185418;
 }
@@ -234,6 +236,29 @@ h2 {
 }
 
 .segments .active {
+  background: #70f05b;
+  color: #061006;
+}
+
+.scenario-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.scenario-grid button {
+  min-height: 38px;
+  border: 2px solid #315f2d;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+  padding: 0 10px;
+  text-align: left;
+}
+
+.scenario-grid .active {
+  border-color: #70f05b;
   background: #70f05b;
   color: #061006;
 }
