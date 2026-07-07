@@ -4,6 +4,7 @@ import threading
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .catalog import calculate_total, enrich_items
@@ -150,6 +151,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Historical Computer Parts Shop API", version="0.1.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-Correlation-Id"],
+)
 
 
 class HealthResponse(BaseModel):
