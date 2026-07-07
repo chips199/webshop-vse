@@ -1,0 +1,87 @@
+openapi: 3.0.3
+info:
+  title: Billing Service API
+  version: 0.1.0
+  description: Internal billing service. Business communication uses RabbitMQ.
+servers:
+  - url: http://localhost:8002
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: getHealth
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /payments/{transactionId}/status:
+    get:
+      summary: Get payment status for diagnostics
+      operationId: getPaymentStatus
+      parameters:
+        - name: transactionId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Payment status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentStatusResponse"
+        "404":
+          description: Transaction not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+          example: billing-service
+    PaymentStatusResponse:
+      type: object
+      required: [transactionId, provider, status]
+      properties:
+        transactionId:
+          type: string
+        provider:
+          type: string
+          enum: [paypal, stripe]
+        status:
+          type: string
+          enum: [PENDING, SUCCEEDED, FAILED, REFUNDED]
+    ProblemDetails:
+      type: object
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string

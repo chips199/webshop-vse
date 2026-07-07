@@ -1,0 +1,95 @@
+openapi: 3.0.3
+info:
+  title: Invoice Service API
+  version: 0.1.0
+  description: Internal invoice service. Business communication uses RabbitMQ.
+servers:
+  - url: http://localhost:8003
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: getHealth
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /invoices/{invoiceId}:
+    get:
+      summary: Get invoice metadata
+      operationId: getInvoice
+      parameters:
+        - name: invoiceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Invoice metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvoiceResponse"
+        "404":
+          description: Invoice not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+          example: invoice-service
+    InvoiceResponse:
+      type: object
+      required: [invoiceId, orderId, correlationId, status]
+      properties:
+        invoiceId:
+          type: string
+          format: uuid
+        orderId:
+          type: string
+          format: uuid
+        correlationId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [CREATED, FAILED]
+        pdfPath:
+          type: string
+          nullable: true
+    ProblemDetails:
+      type: object
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string

@@ -1,0 +1,119 @@
+openapi: 3.0.3
+info:
+  title: Audit Service API
+  version: 0.1.0
+  description: API for immutable audit snapshots.
+servers:
+  - url: http://localhost:8004
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: getHealth
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /audit/orders/{correlationId}:
+    get:
+      summary: Get audit snapshots for an order
+      operationId: getOrderAuditTimeline
+      parameters:
+        - name: correlationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Chronological audit snapshots
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [correlationId, snapshots]
+                properties:
+                  correlationId:
+                    type: string
+                    format: uuid
+                  snapshots:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuditSnapshot"
+        "404":
+          description: No snapshots found
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+          example: audit-service
+    AuditSnapshot:
+      type: object
+      required:
+        - id
+        - correlationId
+        - eventType
+        - service
+        - timestamp
+        - payload
+        - actor
+        - statusCode
+      properties:
+        id:
+          type: string
+          format: uuid
+        correlationId:
+          type: string
+          format: uuid
+        eventType:
+          type: string
+          example: PAYMENT_FAILED
+        service:
+          type: string
+          example: billing-service
+        timestamp:
+          type: string
+          format: date-time
+        payload:
+          type: object
+          additionalProperties: true
+        previousEventId:
+          type: string
+          format: uuid
+          nullable: true
+        actor:
+          type: string
+          example: system
+        statusCode:
+          type: string
+          enum: [SUCCESS, FAILURE, COMPENSATING, COMPENSATED]
+    ProblemDetails:
+      type: object
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string

@@ -1,0 +1,171 @@
+openapi: 3.0.3
+info:
+  title: Shop Service API
+  version: 0.1.0
+  description: External order API for the online shop.
+servers:
+  - url: http://localhost:8000
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: getHealth
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /orders:
+    post:
+      summary: Create an order
+      operationId: createOrder
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderRequest"
+      responses:
+        "201":
+          description: Order accepted and completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderResponse"
+        "202":
+          description: Order accepted for asynchronous processing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderResponse"
+        "409":
+          description: Order conflict
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "422":
+          description: Validation or business rule failure
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+  /orders/{orderId}:
+    get:
+      summary: Get order status
+      operationId: getOrder
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Current order state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderResponse"
+        "404":
+          description: Order not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+components:
+  parameters:
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 128
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+          example: shop-service
+    CreateOrderRequest:
+      type: object
+      required: [customerId, items, payment]
+      properties:
+        customerId:
+          type: string
+          format: uuid
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/OrderItem"
+        payment:
+          $ref: "#/components/schemas/PaymentSelection"
+    OrderItem:
+      type: object
+      required: [productId, quantity]
+      properties:
+        productId:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          minimum: 1
+    PaymentSelection:
+      type: object
+      required: [provider, currency]
+      properties:
+        provider:
+          type: string
+          enum: [paypal, stripe]
+        currency:
+          type: string
+          example: EUR
+    OrderResponse:
+      type: object
+      required: [orderId, correlationId, status]
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        correlationId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [PENDING, COMPLETED, OUT_OF_STOCK, PAYMENT_FAILED, ROLLBACK_COMPLETED]
+    ProblemDetails:
+      type: object
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
