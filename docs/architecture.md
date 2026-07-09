@@ -203,7 +203,7 @@ Mindestfelder:
 | payload | JSON | Relevanter Zustand zum Zeitpunkt des Events |
 | previousEventId | UUID/null | Verkettung zum vorherigen Snapshot |
 | actor | String | Systemkomponente oder Benutzer |
-| statusCode | String | `SUCCESS`, `FAILURE`, `COMPENSATING`, `COMPENSATED` |
+| statusCode | String | `SUCCESS`, `FAILURE`, `RETRY`, `COMPENSATING`, `COMPENSATED` |
 
 Snapshots werden nur eingefuegt. Updates und Deletes sind fuer die
 Snapshot-Tabelle fachlich verboten.
