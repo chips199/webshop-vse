@@ -18,8 +18,26 @@ class PaymentFacade:
         amount: Decimal,
         currency: str,
         payment_method: str | None = None,
+        payment_metadata: dict | None = None,
     ) -> PaymentResult:
-        return self._adapter.charge(order_id, amount, currency, payment_method)
+        return self._adapter.charge(order_id, amount, currency, payment_method, payment_metadata)
+
+    def create_paypal_order(
+        self,
+        reference_id: str,
+        amount: Decimal,
+        currency: str,
+        return_url: str | None = None,
+        cancel_url: str | None = None,
+    ) -> dict:
+        if not hasattr(self._adapter, "create_order"):
+            raise ValueError("Current payment adapter does not support PayPal orders")
+        return self._adapter.create_order(reference_id, amount, currency, return_url, cancel_url)
+
+    def capture_paypal_order(self, paypal_order_id: str) -> dict:
+        if not hasattr(self._adapter, "capture_order"):
+            raise ValueError("Current payment adapter does not support PayPal captures")
+        return self._adapter.capture_order(paypal_order_id)
 
     def refund(self, transaction_id: str, amount: Decimal) -> PaymentResult:
         return self._adapter.refund(transaction_id, amount)

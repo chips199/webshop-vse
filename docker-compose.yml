@@ -118,6 +118,7 @@ services:
     environment:
       VITE_SHOP_API_URL: http://localhost:8000
       VITE_AUDIT_API_URL: http://localhost:8004
+      VITE_BILLING_API_URL: http://localhost:8002
     ports:
       - "3000:80"
     depends_on:

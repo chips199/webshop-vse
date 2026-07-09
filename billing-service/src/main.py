@@ -5,6 +5,7 @@ import threading
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .config import settings
@@ -71,6 +72,7 @@ def handle_billing_message(message: dict) -> None:
             Decimal(payload["amount"]),
             payload["currency"],
             payment.get("testPaymentMethod"),
+            payment,
         )
     except RuntimeError as exc:
         event = build_message(
@@ -141,6 +143,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Billing Service API", version="0.1.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["X-Correlation-Id"],
+)
 
 
 class HealthResponse(BaseModel):
@@ -152,6 +162,30 @@ class PaymentStatusResponse(BaseModel):
     transactionId: str
     provider: str
     status: str
+
+
+class PayPalCreateOrderRequest(BaseModel):
+    referenceId: str
+    amount: str
+    currency: str = "EUR"
+    returnUrl: str | None = None
+    cancelUrl: str | None = None
+
+
+class PayPalCreateOrderResponse(BaseModel):
+    orderId: str
+    status: str
+    approveUrl: str | None = None
+    stub: bool = False
+
+
+class PayPalCaptureResponse(BaseModel):
+    orderId: str
+    captureId: str
+    status: str
+    payer: dict | None = None
+    shippingAddress: dict | None = None
+    stub: bool = False
 
 
 @app.middleware("http")
@@ -177,3 +211,29 @@ async def get_payment_status(transactionId: str) -> PaymentStatusResponse:
         provider=result.provider,
         status=result.status.value,
     )
+
+
+@app.post("/paypal/orders", response_model=PayPalCreateOrderResponse)
+async def create_paypal_order(request: PayPalCreateOrderRequest) -> PayPalCreateOrderResponse:
+    facade = get_payment_facade("paypal")
+    try:
+        result = facade.create_paypal_order(
+            request.referenceId,
+            Decimal(request.amount),
+            request.currency,
+            request.returnUrl,
+            request.cancelUrl,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return PayPalCreateOrderResponse(**result)
+
+
+@app.post("/paypal/orders/{paypalOrderId}/capture", response_model=PayPalCaptureResponse)
+async def capture_paypal_order(paypalOrderId: str) -> PayPalCaptureResponse:
+    facade = get_payment_facade("paypal")
+    try:
+        result = facade.capture_paypal_order(paypalOrderId)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return PayPalCaptureResponse(**result)

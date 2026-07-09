@@ -262,6 +262,10 @@ class PaymentSelection(BaseModel):
     cardholder: str | None = None
     testPaymentMethod: str | None = None
     paypalEmail: str | None = None
+    paypalOrderId: str | None = None
+    paypalCaptureId: str | None = None
+    approveUrl: str | None = None
+    status: str | None = None
 
 
 class CreateOrderRequest(BaseModel):

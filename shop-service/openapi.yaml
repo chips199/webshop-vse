@@ -281,6 +281,18 @@ components:
         paypalEmail:
           type: string
           description: PayPal sandbox buyer email entered in the checkout UI.
+        paypalOrderId:
+          type: string
+          description: PayPal sandbox order id approved by the buyer.
+        paypalCaptureId:
+          type: string
+          description: PayPal sandbox capture id after successful capture.
+        approveUrl:
+          type: string
+          description: PayPal approval URL opened by the checkout UI.
+        status:
+          type: string
+          description: Last known PayPal sandbox status.
     OrderResponse:
       type: object
       required: [orderId, correlationId, status]

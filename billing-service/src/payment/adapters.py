@@ -17,6 +17,7 @@ class PaymentAdapter:
         amount: Decimal,
         currency: str,
         payment_method: str | None = None,
+        payment_metadata: dict | None = None,
     ) -> PaymentResult:
         raise NotImplementedError
 
@@ -36,6 +37,7 @@ class StripeAdapter(PaymentAdapter):
         amount: Decimal,
         currency: str,
         payment_method: str | None = None,
+        payment_metadata: dict | None = None,
     ) -> PaymentResult:
         if settings.stripe_secret_key:
             return self._charge_with_stripe(order_id, amount, currency, payment_method)
@@ -127,7 +129,16 @@ class PayPalAdapter(PaymentAdapter):
         amount: Decimal,
         currency: str,
         payment_method: str | None = None,
+        payment_metadata: dict | None = None,
     ) -> PaymentResult:
+        payment_metadata = payment_metadata or {}
+        if payment_metadata.get("paypalCaptureId"):
+            return PaymentResult(
+                transaction_id=payment_metadata["paypalCaptureId"],
+                provider=self.provider_name,
+                status=PaymentStatus.SUCCEEDED,
+                reason=f"PayPal sandbox order {payment_metadata.get('paypalOrderId')} captured",
+            )
         if settings.paypal_client_id and settings.paypal_client_secret:
             return self._create_paypal_order(order_id, amount, currency)
         return PaymentResult(
@@ -150,39 +161,97 @@ class PayPalAdapter(PaymentAdapter):
             status=PaymentStatus.SUCCEEDED,
         )
 
-    def _create_paypal_order(self, order_id: str, amount: Decimal, currency: str) -> PaymentResult:
-        access_token = self._access_token()
-        request = Request(
-            f"{settings.paypal_base_url}/v2/checkout/orders",
-            data=json.dumps(
-                {
-                    "intent": "CAPTURE",
-                    "purchase_units": [
-                        {
-                            "reference_id": order_id,
-                            "amount": {
-                                "currency_code": currency.upper(),
-                                "value": f"{amount:.2f}",
-                            },
-                        }
-                    ],
-                }
-            ).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json",
-                "Prefer": "return=representation",
+    def create_order(
+        self,
+        reference_id: str,
+        amount: Decimal,
+        currency: str,
+        return_url: str | None = None,
+        cancel_url: str | None = None,
+    ) -> dict:
+        if not settings.paypal_client_id or not settings.paypal_client_secret:
+            return {
+                "orderId": f"paypal-stub-{reference_id}",
+                "status": "CREATED",
+                "approveUrl": None,
+                "stub": True,
+            }
+        body = self._paypal_json_request(
+            "/v2/checkout/orders",
+            {
+                "intent": "CAPTURE",
+                "purchase_units": [
+                    {
+                        "reference_id": reference_id,
+                        "amount": {
+                            "currency_code": currency.upper(),
+                            "value": f"{amount:.2f}",
+                        },
+                    }
+                ],
+                "application_context": {
+                    "brand_name": "Retro Parts Terminal",
+                    "shipping_preference": "GET_FROM_FILE",
+                    "user_action": "PAY_NOW",
+                    "return_url": return_url or "http://localhost:3000/checkout?paypal=approved",
+                    "cancel_url": cancel_url or "http://localhost:3000/checkout?paypal=cancelled",
+                },
             },
-            method="POST",
         )
-        try:
-            with urlopen(request, timeout=20) as response:
-                body = json.loads(response.read().decode("utf-8"))
-        except (HTTPError, URLError) as exc:
-            raise RuntimeError(f"PayPal sandbox order request failed: {exc}") from exc
-        if body.get("id"):
+        approve_url = next(
+            (link["href"] for link in body.get("links", []) if link.get("rel") == "approve"),
+            None,
+        )
+        return {
+            "orderId": body["id"],
+            "status": body.get("status", "CREATED"),
+            "approveUrl": approve_url,
+            "stub": False,
+        }
+
+    def capture_order(self, paypal_order_id: str) -> dict:
+        if paypal_order_id.startswith("paypal-stub-"):
+            return {
+                "orderId": paypal_order_id,
+                "captureId": f"capture-{paypal_order_id}",
+                "status": "COMPLETED",
+                "payer": {
+                    "firstName": "Ada",
+                    "lastName": "Lovelace",
+                    "email": "buyer@example.test",
+                },
+                "shippingAddress": {
+                    "street": "Retroallee",
+                    "houseNumber": "8",
+                    "postalCode": "10115",
+                    "city": "Berlin",
+                    "country": "DE",
+                },
+                "stub": True,
+            }
+        body = self._paypal_json_request(f"/v2/checkout/orders/{paypal_order_id}/capture", {})
+        capture_id = None
+        shipping_address = None
+        for unit in body.get("purchase_units", []):
+            captures = unit.get("payments", {}).get("captures", [])
+            if captures:
+                capture_id = captures[0].get("id")
+            if unit.get("shipping"):
+                shipping_address = _normalize_paypal_shipping(unit["shipping"])
+        return {
+            "orderId": body["id"],
+            "captureId": capture_id or body["id"],
+            "status": body.get("status", "COMPLETED"),
+            "payer": _normalize_paypal_payer(body.get("payer", {})),
+            "shippingAddress": shipping_address,
+            "stub": False,
+        }
+
+    def _create_paypal_order(self, order_id: str, amount: Decimal, currency: str) -> PaymentResult:
+        body = self.create_order(order_id, amount, currency)
+        if body.get("orderId"):
             return PaymentResult(
-                transaction_id=body["id"],
+                transaction_id=body["orderId"],
                 provider=self.provider_name,
                 status=PaymentStatus.SUCCEEDED,
                 reason=f"PayPal sandbox order status {body.get('status')}",
@@ -193,6 +262,24 @@ class PayPalAdapter(PaymentAdapter):
             status=PaymentStatus.FAILED,
             reason="PayPal sandbox did not return an order id",
         )
+
+    def _paypal_json_request(self, path: str, payload: dict) -> dict:
+        access_token = self._access_token()
+        request = Request(
+            f"{settings.paypal_base_url}{path}",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=20) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except (HTTPError, URLError) as exc:
+            raise RuntimeError(f"PayPal sandbox request failed: {exc}") from exc
 
     def _access_token(self) -> str:
         request = Request(
@@ -215,3 +302,33 @@ class PayPalAdapter(PaymentAdapter):
 
 def _minor_units(amount: Decimal) -> int:
     return int((amount * Decimal("100")).quantize(Decimal("1")))
+
+
+def _normalize_paypal_payer(payer: dict) -> dict:
+    name = payer.get("name", {})
+    return {
+        "firstName": name.get("given_name") or "",
+        "lastName": name.get("surname") or "",
+        "email": payer.get("email_address") or "",
+        "payerId": payer.get("payer_id") or "",
+    }
+
+
+def _normalize_paypal_shipping(shipping: dict) -> dict:
+    address = shipping.get("address", {})
+    street, house_number = _split_street_and_house_number(address.get("address_line_1") or "")
+    return {
+        "street": street or address.get("address_line_1") or "PayPal-Adresse",
+        "houseNumber": house_number or "-",
+        "postalCode": address.get("postal_code") or "-",
+        "city": address.get("admin_area_2") or address.get("admin_area_1") or "-",
+        "country": address.get("country_code") or "-",
+        "recipientName": shipping.get("name", {}).get("full_name") or "",
+    }
+
+
+def _split_street_and_house_number(address_line: str) -> tuple[str, str]:
+    parts = address_line.strip().rsplit(" ", 1)
+    if len(parts) == 2 and any(char.isdigit() for char in parts[1]):
+        return parts[0], parts[1]
+    return address_line.strip(), ""
