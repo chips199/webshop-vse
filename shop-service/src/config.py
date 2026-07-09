@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     service_port: int = 8000
     database_url: str = "postgresql://webshop:webshop@localhost:5432/webshop"
     rabbitmq_url: str = "amqp://webshop:webshop@localhost:5672/"
+    admin_username: str = "admin"
+    admin_password: str = "admin123"
+    admin_session_hours: int = 8
+    admin_cookie_secure: bool = False
 
 
 settings = Settings()

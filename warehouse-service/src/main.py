@@ -87,6 +87,7 @@ def handle_warehouse_message(message: dict) -> None:
             "currency": payload["currency"],
             "provider": payload["provider"],
             "scenario": scenario,
+            "payment": payload.get("payment", {}),
         }
     else:
         event_type = "warehouse.reservation.failed"

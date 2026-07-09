@@ -1,15 +1,14 @@
 openapi: 3.0.3
 info:
   title: Historical Computer Parts Shop Service API
-  version: 0.1.0
-  description: External order API for a shop selling historical computer parts.
+  version: 0.2.0
+  description: External shop, checkout and protected admin API for historical computer parts.
 servers:
   - url: http://localhost:8000
 paths:
   /health:
     get:
       summary: Health check
-      operationId: getHealth
       responses:
         "200":
           description: Service is healthy
@@ -17,13 +16,23 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthResponse"
+  /products:
+    get:
+      summary: List active products
+      responses:
+        "200":
+          description: Product catalog
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Product"
   /orders:
     post:
       summary: Create an order
-      operationId: createOrder
       parameters:
         - $ref: "#/components/parameters/CorrelationId"
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -31,36 +40,18 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateOrderRequest"
       responses:
-        "201":
-          description: Order accepted and completed
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OrderResponse"
         "202":
           description: Order accepted for asynchronous processing
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/OrderResponse"
-        "409":
-          description: Order conflict
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/ProblemDetails"
         "422":
           description: Validation or business rule failure
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/ProblemDetails"
   /orders/{orderId}:
     get:
       summary: Get order status
-      operationId: getOrder
       parameters:
-        - $ref: "#/components/parameters/CorrelationId"
         - name: orderId
           in: path
           required: true
@@ -76,11 +67,89 @@ paths:
                 $ref: "#/components/schemas/OrderResponse"
         "404":
           description: Order not found
-          content:
-            application/problem+json:
+  /admin/login:
+    post:
+      summary: Login as admin and receive an HttpOnly session cookie
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminLoginRequest"
+      responses:
+        "200":
+          description: Login accepted
+          headers:
+            Set-Cookie:
               schema:
-                $ref: "#/components/schemas/ProblemDetails"
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSession"
+        "401":
+          description: Invalid credentials
+  /admin/logout:
+    post:
+      summary: Logout admin session
+      responses:
+        "200":
+          description: Session cleared
+  /admin/session:
+    get:
+      summary: Check current admin session
+      security:
+        - AdminCookie: []
+      responses:
+        "200":
+          description: Active admin session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSession"
+        "401":
+          description: Admin login required
+  /admin/orders:
+    get:
+      summary: List recent orders for the admin monitor
+      security:
+        - AdminCookie: []
+      responses:
+        "200":
+          description: Recent orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminOrder"
+        "401":
+          description: Admin login required
+  /admin/orders/{orderId}/audit:
+    get:
+      summary: Get protected audit timeline for an order
+      security:
+        - AdminCookie: []
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Audit timeline
+        "401":
+          description: Admin login required
+        "404":
+          description: Order not found
 components:
+  securitySchemes:
+    AdminCookie:
+      type: apiKey
+      in: cookie
+      name: admin_session
   parameters:
     CorrelationId:
       name: X-Correlation-Id
@@ -89,13 +158,6 @@ components:
       schema:
         type: string
         format: uuid
-    IdempotencyKey:
-      name: Idempotency-Key
-      in: header
-      required: false
-      schema:
-        type: string
-        maxLength: 128
   schemas:
     HealthResponse:
       type: object
@@ -107,13 +169,48 @@ components:
         service:
           type: string
           example: shop-service
+    Product:
+      type: object
+      required: [id, name, year, description, price, currency, imageUrl, imageAlt, imageSource, imageLicense, imageCredit]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        year:
+          type: string
+        description:
+          type: string
+        price:
+          type: string
+        currency:
+          type: string
+        imageUrl:
+          type: string
+          format: uri
+        imageAlt:
+          type: string
+        imageSource:
+          type: string
+          format: uri
+        imageLicense:
+          type: string
+        imageCredit:
+          type: string
     CreateOrderRequest:
       type: object
-      required: [customerId, items, payment]
+      required: [customer, shippingAddress, items, payment]
       properties:
         customerId:
           type: string
           format: uuid
+        customer:
+          $ref: "#/components/schemas/Customer"
+        shippingAddress:
+          $ref: "#/components/schemas/Address"
+        billingAddress:
+          $ref: "#/components/schemas/Address"
         items:
           type: array
           minItems: 1
@@ -121,6 +218,32 @@ components:
             $ref: "#/components/schemas/OrderItem"
         payment:
           $ref: "#/components/schemas/PaymentSelection"
+    Customer:
+      type: object
+      required: [firstName, lastName, email]
+      properties:
+        firstName:
+          type: string
+        lastName:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+    Address:
+      type: object
+      required: [street, houseNumber, postalCode, city, country]
+      properties:
+        street:
+          type: string
+        houseNumber:
+          type: string
+        postalCode:
+          type: string
+        city:
+          type: string
+        country:
+          type: string
     OrderItem:
       type: object
       required: [productId, quantity]
@@ -128,7 +251,6 @@ components:
         productId:
           type: string
           format: uuid
-          example: 22222222-2222-2222-2222-222222222222
         quantity:
           type: integer
           minimum: 1
@@ -144,15 +266,21 @@ components:
           example: EUR
         scenario:
           type: string
-          description: Test scenario for demonstrable saga paths.
+          description: Internal test scenario; omitted by the customer frontend.
           default: happy_path
-          enum:
-            - happy_path
-            - out_of_stock
-            - payment_failed
-            - payment_timeout
-            - invoice_failed
-            - warehouse_commit_failed
+        mode:
+          type: string
+          enum: [sandbox]
+          default: sandbox
+        cardholder:
+          type: string
+          description: Non-sensitive display metadata for Stripe sandbox checkout.
+        testPaymentMethod:
+          type: string
+          description: Stripe sandbox payment method id, for example pm_card_visa.
+        paypalEmail:
+          type: string
+          description: PayPal sandbox buyer email entered in the checkout UI.
     OrderResponse:
       type: object
       required: [orderId, correlationId, status]
@@ -165,39 +293,53 @@ components:
           format: uuid
         status:
           type: string
-          enum:
-            - PENDING
-            - RESERVED
-            - PAYMENT_PENDING
-            - PAYMENT_SUCCEEDED
-            - INVOICE_RETRY_PENDING
-            - WAREHOUSE_COMMIT_FAILED
-            - REFUND_PENDING
-            - REFUND_FAILED
-            - COMPLETED
-            - OUT_OF_STOCK
-            - PAYMENT_FAILED
-            - ROLLBACK_COMPLETED
         amount:
           type: string
           nullable: true
-          example: "149.90"
         currency:
           type: string
           nullable: true
-          example: EUR
-    ProblemDetails:
+    AdminLoginRequest:
       type: object
-      required: [type, title, status]
+      required: [username, password]
       properties:
-        type:
+        username:
           type: string
-          format: uri
-        title:
+        password:
           type: string
+          format: password
+    AdminSession:
+      type: object
+      required: [authenticated]
+      properties:
+        authenticated:
+          type: boolean
+        username:
+          type: string
+          nullable: true
+    AdminOrder:
+      type: object
+      required: [orderId, correlationId, status, amount, currency, createdAt, updatedAt]
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        correlationId:
+          type: string
+          format: uuid
         status:
-          type: integer
-        detail:
           type: string
-        instance:
+        amount:
           type: string
+        currency:
+          type: string
+        customer:
+          type: object
+        shippingAddress:
+          type: object
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time

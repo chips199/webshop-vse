@@ -12,8 +12,14 @@ class PaymentFacade:
     def provider_name(self) -> str:
         return self._adapter.provider_name
 
-    def charge(self, order_id: str, amount: Decimal, currency: str) -> PaymentResult:
-        return self._adapter.charge(order_id, amount, currency)
+    def charge(
+        self,
+        order_id: str,
+        amount: Decimal,
+        currency: str,
+        payment_method: str | None = None,
+    ) -> PaymentResult:
+        return self._adapter.charge(order_id, amount, currency, payment_method)
 
     def refund(self, transaction_id: str, amount: Decimal) -> PaymentResult:
         return self._adapter.refund(transaction_id, amount)

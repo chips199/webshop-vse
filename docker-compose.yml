@@ -36,6 +36,9 @@ services:
       SERVICE_PORT: 8000
       DATABASE_URL: postgresql://webshop:webshop@postgres:5432/webshop
       RABBITMQ_URL: amqp://webshop:webshop@rabbitmq:5672/
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: admin123
+      ADMIN_COOKIE_SECURE: "false"
     ports:
       - "8000:8000"
     depends_on:
@@ -67,6 +70,11 @@ services:
       DATABASE_URL: postgresql://webshop:webshop@postgres:5432/webshop
       RABBITMQ_URL: amqp://webshop:webshop@rabbitmq:5672/
       PAYMENT_PROVIDER: stripe
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_PAYMENT_METHOD: ${STRIPE_PAYMENT_METHOD:-pm_card_visa}
+      PAYPAL_CLIENT_ID: ${PAYPAL_CLIENT_ID:-}
+      PAYPAL_CLIENT_SECRET: ${PAYPAL_CLIENT_SECRET:-}
+      PAYPAL_BASE_URL: ${PAYPAL_BASE_URL:-https://api-m.sandbox.paypal.com}
     ports:
       - "8002:8002"
     depends_on:

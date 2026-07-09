@@ -64,7 +64,46 @@ def handle_billing_message(message: dict) -> None:
 
     provider = payload.get("provider") or settings.payment_provider
     facade = get_payment_facade(provider)
-    result = facade.charge(payload["orderId"], Decimal(payload["amount"]), payload["currency"])
+    payment = payload.get("payment", {})
+    try:
+        result = facade.charge(
+            payload["orderId"],
+            Decimal(payload["amount"]),
+            payload["currency"],
+            payment.get("testPaymentMethod"),
+        )
+    except RuntimeError as exc:
+        event = build_message(
+            "billing.payment.failed",
+            message["correlationId"],
+            {
+                "orderId": payload["orderId"],
+                "provider": provider,
+                "amount": payload["amount"],
+                "currency": payload["currency"],
+                "reasonCode": "PAYMENT_PROVIDER_ERROR",
+                "message": str(exc),
+            },
+            previous_event_id=message["messageId"],
+        )
+        publish_message("billing.payment.failed", event)
+        return
+    if result.status.value != "SUCCEEDED":
+        event = build_message(
+            "billing.payment.failed",
+            message["correlationId"],
+            {
+                "orderId": payload["orderId"],
+                "provider": result.provider,
+                "amount": payload["amount"],
+                "currency": payload["currency"],
+                "reasonCode": "PAYMENT_DECLINED",
+                "message": result.reason or "Payment provider did not approve the payment.",
+            },
+            previous_event_id=message["messageId"],
+        )
+        publish_message("billing.payment.failed", event)
+        return
     event_type = "billing.payment.succeeded"
     event_payload = {
         "orderId": payload["orderId"],

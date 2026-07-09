@@ -7,12 +7,17 @@ BILLING_API="${BILLING_API:-http://localhost:8002}"
 INVOICE_API="${INVOICE_API:-http://localhost:8003}"
 AUDIT_API="${AUDIT_API:-http://localhost:8004}"
 FRONTEND_URL="${FRONTEND_URL:-http://localhost:3000}"
+ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
 
-CUSTOMER_ID="11111111-1111-1111-1111-111111111111"
 PRODUCT_ID="22222222-2222-2222-2222-222222222222"
 
 json_field() {
   python3 -c 'import json, sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$1"
+}
+
+json_len() {
+  python3 -c 'import json, sys; print(len(json.load(sys.stdin)))'
 }
 
 snapshot_count() {
@@ -27,13 +32,12 @@ check_url() {
 }
 
 create_order() {
-  local scenario="$1"
-  local correlation_id="$2"
+  local correlation_id="$1"
   curl -fsS \
     -X POST "$SHOP_API/orders" \
     -H "Content-Type: application/json" \
     -H "X-Correlation-Id: $correlation_id" \
-    -d "{\"customerId\":\"$CUSTOMER_ID\",\"items\":[{\"productId\":\"$PRODUCT_ID\",\"quantity\":1}],\"payment\":{\"provider\":\"stripe\",\"currency\":\"EUR\",\"scenario\":\"$scenario\"}}"
+    -d "{\"customer\":{\"firstName\":\"Ada\",\"lastName\":\"Lovelace\",\"email\":\"ada@example.test\",\"phone\":\"+49 30 123456\"},\"shippingAddress\":{\"street\":\"Retroallee\",\"houseNumber\":\"8\",\"postalCode\":\"10115\",\"city\":\"Berlin\",\"country\":\"Deutschland\"},\"items\":[{\"productId\":\"$PRODUCT_ID\",\"quantity\":1}],\"payment\":{\"provider\":\"stripe\",\"currency\":\"EUR\"}}"
 }
 
 wait_for_status() {
@@ -54,31 +58,43 @@ wait_for_status() {
   return 1
 }
 
-check_audit() {
-  local correlation_id="$1"
-  local count=""
-  count="$(curl -fsS "$AUDIT_API/audit/orders/$correlation_id" | snapshot_count)"
-  if [[ "$count" -lt 1 ]]; then
-    echo "error - no audit snapshots for $correlation_id" >&2
+check_admin() {
+  local order_id="$1"
+  local cookie_file
+  local status_code
+  local count
+  local audit_count
+
+  cookie_file="$(mktemp)"
+
+  status_code="$(curl -s -o /dev/null -w "%{http_code}" "$SHOP_API/admin/orders")"
+  if [[ "$status_code" != "401" ]]; then
+    echo "error - admin orders should require login, got HTTP $status_code" >&2
     return 1
   fi
-  echo "ok - audit contains $count snapshots for $correlation_id"
-}
+  echo "ok - admin orders require login"
 
-run_scenario() {
-  local scenario="$1"
-  local expected_status="$2"
-  local correlation_id
-  local response
-  local order_id
+  curl -fsS \
+    -c "$cookie_file" \
+    -X POST "$SHOP_API/admin/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"username\":\"$ADMIN_USERNAME\",\"password\":\"$ADMIN_PASSWORD\"}" >/dev/null
+  echo "ok - admin login"
 
-  correlation_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
-  response="$(create_order "$scenario" "$correlation_id")"
-  order_id="$(printf '%s' "$response" | json_field orderId)"
+  count="$(curl -fsS -b "$cookie_file" "$SHOP_API/admin/orders" | json_len)"
+  if [[ "$count" -lt 1 ]]; then
+    echo "error - admin orders returned no orders" >&2
+    return 1
+  fi
+  echo "ok - admin orders contains $count orders"
 
-  echo "scenario - $scenario -> $order_id"
-  wait_for_status "$order_id" "$expected_status"
-  check_audit "$correlation_id"
+  audit_count="$(curl -fsS -b "$cookie_file" "$SHOP_API/admin/orders/$order_id/audit" | snapshot_count)"
+  if [[ "$audit_count" -lt 1 ]]; then
+    echo "error - protected admin audit returned no snapshots" >&2
+    return 1
+  fi
+  echo "ok - protected admin audit contains $audit_count snapshots"
+  rm -f "$cookie_file"
 }
 
 echo "Checking service health"
@@ -89,11 +105,20 @@ check_url "invoice" "$INVOICE_API/health"
 check_url "audit" "$AUDIT_API/health"
 check_url "frontend" "$FRONTEND_URL"
 
-echo "Checking saga scenarios"
-run_scenario "happy_path" "COMPLETED"
-run_scenario "out_of_stock" "OUT_OF_STOCK"
-run_scenario "payment_failed" "PAYMENT_FAILED"
-run_scenario "invoice_failed" "INVOICE_RETRY_PENDING"
-run_scenario "warehouse_commit_failed" "ROLLBACK_COMPLETED"
+echo "Checking product catalog"
+product_count="$(curl -fsS "$SHOP_API/products" | json_len)"
+if [[ "$product_count" -lt 4 ]]; then
+  echo "error - expected at least 4 products, got $product_count" >&2
+  exit 1
+fi
+echo "ok - product catalog contains $product_count products"
+
+echo "Checking customer checkout happy path"
+correlation_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+response="$(create_order "$correlation_id")"
+order_id="$(printf '%s' "$response" | json_field orderId)"
+echo "order - $order_id"
+wait_for_status "$order_id" "COMPLETED"
+check_admin "$order_id"
 
 echo "Smoke test completed successfully"

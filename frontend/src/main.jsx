@@ -1,79 +1,95 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Cpu, Minus, Plus, ReceiptText, ShoppingCart, Terminal, Zap } from "lucide-react";
+import {
+  ArrowLeft,
+  ClipboardList,
+  CreditCard,
+  Cpu,
+  Eye,
+  Lock,
+  LogOut,
+  Minus,
+  PackageCheck,
+  Plus,
+  ReceiptText,
+  ShieldCheck,
+  ShoppingCart,
+  Terminal,
+} from "lucide-react";
 import "./styles.css";
 
 const SHOP_API = import.meta.env.VITE_SHOP_API_URL || "http://localhost:8000";
-const AUDIT_API = import.meta.env.VITE_AUDIT_API_URL || "http://localhost:8004";
 
-const products = [
-  {
-    id: "22222222-2222-2222-2222-222222222222",
-    name: "Intel 8086 CPU",
-    year: "1978",
-    price: 149.9,
-    description: "16-Bit-Prozessor, Gold-Ceramic-Look, Herzstueck frueher PC-Geschichte.",
-    art: ["00111100", "01111110", "11011011", "11111111", "00100100"],
-  },
-  {
-    id: "33333333-3333-3333-3333-333333333333",
-    name: "Commodore 64 SID 6581",
-    year: "1982",
-    price: 89.9,
-    description: "Legendärer Soundchip fuer knisternde Chiptunes und warme Filter.",
-    art: ["11100111", "10011001", "11111111", "01011010", "10100101"],
-  },
-  {
-    id: "44444444-4444-4444-4444-444444444444",
-    name: "IBM Model M Keyboard",
-    year: "1985",
-    price: 129,
-    description: "Clicky Buckling-Spring-Tastatur, schwer, laut und erfreulich unzerstoerbar.",
-    art: ["11111111", "10101010", "11111111", "10101010", "11111111"],
-  },
-];
+const emptyCustomer = {
+  firstName: "",
+  lastName: "",
+  email: "",
+  phone: "",
+};
 
-const scenarios = [
-  { id: "happy_path", label: "Happy Path" },
-  { id: "out_of_stock", label: "Out of Stock" },
-  { id: "payment_failed", label: "Payment Fail" },
-  { id: "invoice_failed", label: "Invoice Fail" },
-  { id: "warehouse_commit_failed", label: "Refund Run" },
-];
+const emptyAddress = {
+  street: "",
+  houseNumber: "",
+  postalCode: "",
+  city: "",
+  country: "Deutschland",
+};
 
-function formatPrice(value) {
-  return `${value.toFixed(2)} EUR`;
+const emptyPaymentDetails = {
+  stripe: {
+    cardholder: "",
+    testPaymentMethod: "pm_card_visa",
+  },
+  paypal: {
+    paypalEmail: "",
+  },
+};
+
+function formatPrice(value, currency = "EUR") {
+  return `${Number(value).toFixed(2)} ${currency}`;
 }
 
-function PixelArt({ rows }) {
-  return (
-    <div className="pixel-art" aria-hidden="true">
-      {rows.flatMap((row, y) =>
-        row.split("").map((bit, x) => (
-          <span key={`${y}-${x}`} className={bit === "1" ? "on" : ""} />
-        )),
-      )}
-    </div>
-  );
+function navigate(path) {
+  window.history.pushState({}, "", path);
+  window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
 function App() {
+  const [path, setPath] = useState(window.location.pathname);
+  const [products, setProducts] = useState([]);
   const [cart, setCart] = useState({});
   const [provider, setProvider] = useState("stripe");
-  const [scenario, setScenario] = useState("happy_path");
+  const [paymentDetails, setPaymentDetails] = useState(emptyPaymentDetails);
+  const [customer, setCustomer] = useState(emptyCustomer);
+  const [shippingAddress, setShippingAddress] = useState(emptyAddress);
   const [order, setOrder] = useState(null);
-  const [timeline, setTimeline] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    const onPopState = () => setPath(window.location.pathname);
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  useEffect(() => {
+    fetch(`${SHOP_API}/products`)
+      .then((response) => {
+        if (!response.ok) throw new Error(`Produktkatalog nicht erreichbar: HTTP ${response.status}`);
+        return response.json();
+      })
+      .then(setProducts)
+      .catch((caught) => setError(caught.message));
+  }, []);
 
   const cartItems = useMemo(
     () =>
       products
         .filter((product) => cart[product.id])
         .map((product) => ({ ...product, quantity: cart[product.id] })),
-    [cart],
+    [cart, products],
   );
-  const total = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const total = cartItems.reduce((sum, item) => sum + Number(item.price) * item.quantity, 0);
 
   function changeQuantity(productId, delta) {
     setCart((current) => {
@@ -88,37 +104,33 @@ function App() {
     });
   }
 
-  async function refreshOrder(orderId, correlationId) {
-    const [orderResponse, auditResponse] = await Promise.all([
-      fetch(`${SHOP_API}/orders/${orderId}`),
-      fetch(`${AUDIT_API}/audit/orders/${correlationId}`),
-    ]);
-    if (orderResponse.ok) {
-      setOrder(await orderResponse.json());
-    }
-    if (auditResponse.ok) {
-      const audit = await auditResponse.json();
-      setTimeline(audit.snapshots || []);
-    }
+  function addToCart(productId) {
+    changeQuantity(productId, 1);
   }
 
-  async function checkout() {
+  async function submitOrder(event) {
+    event.preventDefault();
     if (cartItems.length === 0) return;
     setBusy(true);
     setError("");
-    setTimeline([]);
-    const correlationId = crypto.randomUUID();
+    setOrder(null);
     try {
       const response = await fetch(`${SHOP_API}/orders`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Correlation-Id": correlationId,
+          "X-Correlation-Id": crypto.randomUUID(),
         },
         body: JSON.stringify({
-          customerId: "11111111-1111-1111-1111-111111111111",
+          customer,
+          shippingAddress,
           items: cartItems.map((item) => ({ productId: item.id, quantity: item.quantity })),
-          payment: { provider, currency: "EUR", scenario },
+          payment: {
+            provider,
+            currency: "EUR",
+            mode: "sandbox",
+            ...(provider === "stripe" ? paymentDetails.stripe : paymentDetails.paypal),
+          },
         }),
       });
       if (!response.ok) {
@@ -126,10 +138,7 @@ function App() {
       }
       const created = await response.json();
       setOrder(created);
-      for (let attempt = 0; attempt < 8; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 650));
-        await refreshOrder(created.orderId, created.correlationId);
-      }
+      setCart({});
     } catch (caught) {
       setError(caught.message);
     } finally {
@@ -139,128 +148,526 @@ function App() {
 
   return (
     <main className="terminal-shell">
-      <section className="topbar">
-        <div>
-          <p className="kicker">RETRO PARTS TERMINAL // ONLINE</p>
-          <h1>Historische Computerteile</h1>
-        </div>
-        <div className="status-lamp">
-          <Terminal size={18} />
-          <span>API LINK ACTIVE</span>
-        </div>
-      </section>
+      <Header path={path} />
+      {path.startsWith("/admin") ? (
+        <AdminPage />
+      ) : path === "/checkout" ? (
+        <CheckoutPage
+          cartItems={cartItems}
+          customer={customer}
+          error={error}
+          order={order}
+          paymentDetails={paymentDetails}
+          provider={provider}
+          setCustomer={setCustomer}
+          setPaymentDetails={setPaymentDetails}
+          setProvider={setProvider}
+          setShippingAddress={setShippingAddress}
+          shippingAddress={shippingAddress}
+          submitOrder={submitOrder}
+          total={total}
+          busy={busy}
+        />
+      ) : path.startsWith("/products/") ? (
+        <ProductDetailPage
+          cartItems={cartItems}
+          product={products.find((entry) => entry.id === path.split("/").pop())}
+          addToCart={addToCart}
+          changeQuantity={changeQuantity}
+        />
+      ) : (
+        <ShopPage
+          addToCart={addToCart}
+          cartItems={cartItems}
+          changeQuantity={changeQuantity}
+          error={error}
+          products={products}
+          total={total}
+        />
+      )}
+    </main>
+  );
+}
 
-      <section className="layout">
-        <div className="products">
-          {products.map((product) => (
-            <article className="product" key={product.id}>
-              <PixelArt rows={product.art} />
-              <div className="product-body">
-                <div className="product-title">
-                  <Cpu size={18} />
-                  <h2>{product.name}</h2>
-                </div>
-                <p className="year">{product.year}</p>
-                <p>{product.description}</p>
-                <div className="product-actions">
-                  <strong>{formatPrice(product.price)}</strong>
-                  <div className="stepper">
-                    <button onClick={() => changeQuantity(product.id, -1)} aria-label="Menge verringern">
-                      <Minus size={16} />
-                    </button>
-                    <span>{cart[product.id] || 0}</span>
-                    <button onClick={() => changeQuantity(product.id, 1)} aria-label="Menge erhoehen">
-                      <Plus size={16} />
-                    </button>
-                  </div>
+function Header({ path }) {
+  return (
+    <section className="topbar">
+      <button className="brand" onClick={() => navigate("/")}>
+        <Terminal size={22} />
+        <span>
+          <small>RETRO PARTS TERMINAL</small>
+          Historische Computerteile
+        </span>
+      </button>
+      <nav className="nav">
+        <button className={path === "/" ? "active" : ""} onClick={() => navigate("/")}>
+          <Cpu size={16} />
+          Shop
+        </button>
+        <button className={path === "/checkout" ? "active" : ""} onClick={() => navigate("/checkout")}>
+          <ShoppingCart size={16} />
+          Checkout
+        </button>
+        <button className={path.startsWith("/admin") ? "active" : ""} onClick={() => navigate("/admin")}>
+          <ShieldCheck size={16} />
+          Admin
+        </button>
+      </nav>
+    </section>
+  );
+}
+
+function ShopPage({ addToCart, cartItems, changeQuantity, error, products, total }) {
+  return (
+    <section className="shop-layout">
+      <div className="catalog">
+        {products.map((product) => (
+          <article className="product" key={product.id}>
+            <button className="image-button" onClick={() => navigate(`/products/${product.id}`)}>
+              <img src={product.imageUrl} alt={product.imageAlt} />
+            </button>
+            <div className="product-body">
+              <button className="product-title product-title-button" onClick={() => navigate(`/products/${product.id}`)}>
+                <Cpu size={18} />
+                <h2>{product.name}</h2>
+              </button>
+              <p className="year">{product.year}</p>
+              <p>{product.description}</p>
+              <small className="credit">
+                Bild: {product.imageCredit}, {product.imageLicense}
+              </small>
+              <div className="product-actions">
+                <strong>{formatPrice(product.price, product.currency)}</strong>
+                <div className="stepper">
+                  <button onClick={() => changeQuantity(product.id, -1)} aria-label="Menge verringern">
+                    <Minus size={16} />
+                  </button>
+                  <span>{cartItems.find((item) => item.id === product.id)?.quantity || 0}</span>
+                  <button onClick={() => changeQuantity(product.id, 1)} aria-label="Menge erhoehen">
+                    <Plus size={16} />
+                  </button>
                 </div>
               </div>
-            </article>
-          ))}
-        </div>
+              <div className="product-buttons">
+                <button className="secondary-button" onClick={() => navigate(`/products/${product.id}`)}>
+                  <Eye size={16} />
+                  Details
+                </button>
+                <button className="add-button" onClick={() => addToCart(product.id)}>
+                  <ShoppingCart size={16} />
+                  In den Warenkorb
+                </button>
+              </div>
+            </div>
+          </article>
+        ))}
+      </div>
+      <CartPanel cartItems={cartItems} total={total} />
+      {error && <p className="error">{error}</p>}
+    </section>
+  );
+}
 
-        <aside className="checkout">
+function ProductDetailPage({ addToCart, cartItems, changeQuantity, product }) {
+  if (!product) {
+    return (
+      <section className="detail-page">
+        <button className="link-button" onClick={() => navigate("/")}>
+          <ArrowLeft size={16} />
+          Zurueck zum Shop
+        </button>
+        <p className="muted">Artikel wurde nicht gefunden.</p>
+      </section>
+    );
+  }
+  const quantity = cartItems.find((item) => item.id === product.id)?.quantity || 0;
+  return (
+    <section className="detail-page">
+      <button className="link-button" onClick={() => navigate("/")}>
+        <ArrowLeft size={16} />
+        Zurueck zum Shop
+      </button>
+      <article className="detail-panel">
+        <img src={product.imageUrl} alt={product.imageAlt} />
+        <div className="detail-copy">
+          <p className="year">{product.year}</p>
+          <h1>{product.name}</h1>
+          <p>{product.description}</p>
+          <dl className="spec-grid">
+            <div>
+              <dt>Preis</dt>
+              <dd>{formatPrice(product.price, product.currency)}</dd>
+            </div>
+            <div>
+              <dt>Bildquelle</dt>
+              <dd>{product.imageCredit}</dd>
+            </div>
+            <div>
+              <dt>Lizenzhinweis</dt>
+              <dd>{product.imageLicense}</dd>
+            </div>
+          </dl>
+          <div className="detail-actions">
+            <div className="stepper">
+              <button onClick={() => changeQuantity(product.id, -1)} aria-label="Menge verringern">
+                <Minus size={16} />
+              </button>
+              <span>{quantity}</span>
+              <button onClick={() => changeQuantity(product.id, 1)} aria-label="Menge erhoehen">
+                <Plus size={16} />
+              </button>
+            </div>
+            <button className="add-button" onClick={() => addToCart(product.id)}>
+              <ShoppingCart size={16} />
+              In den Warenkorb
+            </button>
+            <button className="checkout-button compact" disabled={quantity === 0} onClick={() => navigate("/checkout")}>
+              Zur Kasse
+            </button>
+          </div>
+        </div>
+      </article>
+    </section>
+  );
+}
+
+function CartPanel({ cartItems, total }) {
+  return (
+    <aside className="checkout">
+      <div className="panel-title">
+        <ShoppingCart size={18} />
+        <h2>Warenkorb</h2>
+      </div>
+      {cartItems.length === 0 ? (
+        <p className="muted">Keine Bauteile ausgewaehlt.</p>
+      ) : (
+        <ul className="cart-list">
+          {cartItems.map((item) => (
+            <li key={item.id}>
+              <span>
+                {item.quantity}x {item.name}
+              </span>
+              <strong>{formatPrice(Number(item.price) * item.quantity, item.currency)}</strong>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="total">
+        <span>Total</span>
+        <strong>{formatPrice(total)}</strong>
+      </div>
+      <button className="checkout-button" disabled={cartItems.length === 0} onClick={() => navigate("/checkout")}>
+        Zur Kasse
+      </button>
+    </aside>
+  );
+}
+
+function CheckoutPage({
+  busy,
+  cartItems,
+  customer,
+  error,
+  order,
+  paymentDetails,
+  provider,
+  setCustomer,
+  setPaymentDetails,
+  setProvider,
+  setShippingAddress,
+  shippingAddress,
+  submitOrder,
+  total,
+}) {
+  return (
+    <section className="checkout-page">
+      <button className="link-button" onClick={() => navigate("/")}>
+        <ArrowLeft size={16} />
+        Weiter einkaufen
+      </button>
+      <form className="checkout-form" onSubmit={submitOrder}>
+        <section className="form-section">
+          <div className="panel-title">
+            <ReceiptText size={18} />
+            <h2>Kontakt</h2>
+          </div>
+          <div className="form-grid">
+            <TextInput label="Vorname" value={customer.firstName} onChange={(value) => setCustomer({ ...customer, firstName: value })} />
+            <TextInput label="Nachname" value={customer.lastName} onChange={(value) => setCustomer({ ...customer, lastName: value })} />
+            <TextInput label="E-Mail" type="email" value={customer.email} onChange={(value) => setCustomer({ ...customer, email: value })} />
+            <TextInput label="Telefon" value={customer.phone} required={false} onChange={(value) => setCustomer({ ...customer, phone: value })} />
+          </div>
+        </section>
+
+        <section className="form-section">
+          <div className="panel-title">
+            <PackageCheck size={18} />
+            <h2>Lieferadresse</h2>
+          </div>
+          <div className="form-grid">
+            <TextInput label="Strasse" value={shippingAddress.street} onChange={(value) => setShippingAddress({ ...shippingAddress, street: value })} />
+            <TextInput label="Hausnummer" value={shippingAddress.houseNumber} onChange={(value) => setShippingAddress({ ...shippingAddress, houseNumber: value })} />
+            <TextInput label="PLZ" value={shippingAddress.postalCode} onChange={(value) => setShippingAddress({ ...shippingAddress, postalCode: value })} />
+            <TextInput label="Ort" value={shippingAddress.city} onChange={(value) => setShippingAddress({ ...shippingAddress, city: value })} />
+            <TextInput label="Land" value={shippingAddress.country} onChange={(value) => setShippingAddress({ ...shippingAddress, country: value })} />
+          </div>
+        </section>
+
+        <section className="form-section">
           <div className="panel-title">
             <ShoppingCart size={18} />
-            <h2>Warenkorb</h2>
+            <h2>Zahlung</h2>
           </div>
+          <div className="segments">
+            <button type="button" className={provider === "stripe" ? "active" : ""} onClick={() => setProvider("stripe")}>
+              Stripe
+            </button>
+            <button type="button" className={provider === "paypal" ? "active" : ""} onClick={() => setProvider("paypal")}>
+              PayPal
+            </button>
+          </div>
+          <PaymentFields
+            paymentDetails={paymentDetails}
+            provider={provider}
+            setPaymentDetails={setPaymentDetails}
+          />
+        </section>
+
+        <aside className="checkout-summary">
+          <h2>Bestelluebersicht</h2>
           {cartItems.length === 0 ? (
-            <p className="muted">Keine Bauteile ausgewaehlt.</p>
+            <p className="muted">Der Warenkorb ist leer.</p>
           ) : (
             <ul className="cart-list">
               {cartItems.map((item) => (
                 <li key={item.id}>
-                  <span>{item.quantity}x {item.name}</span>
-                  <strong>{formatPrice(item.quantity * item.price)}</strong>
+                  <span>
+                    {item.quantity}x {item.name}
+                  </span>
+                  <strong>{formatPrice(Number(item.price) * item.quantity, item.currency)}</strong>
                 </li>
               ))}
             </ul>
           )}
-
-          <div className="provider">
-            <span>Payment</span>
-            <div className="segments">
-              <button className={provider === "stripe" ? "active" : ""} onClick={() => setProvider("stripe")}>
-                Stripe
-              </button>
-              <button className={provider === "paypal" ? "active" : ""} onClick={() => setProvider("paypal")}>
-                PayPal
-              </button>
-            </div>
-          </div>
-
-          <div className="provider">
-            <span>Szenario</span>
-            <div className="scenario-grid">
-              {scenarios.map((entry) => (
-                <button
-                  key={entry.id}
-                  className={scenario === entry.id ? "active" : ""}
-                  onClick={() => setScenario(entry.id)}
-                >
-                  <Zap size={14} />
-                  {entry.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
           <div className="total">
             <span>Total</span>
             <strong>{formatPrice(total)}</strong>
           </div>
-          <button className="checkout-button" disabled={busy || cartItems.length === 0} onClick={checkout}>
-            {busy ? "PROCESSING..." : "ORDER EXEC"}
+          <button className="checkout-button" disabled={busy || cartItems.length === 0}>
+            {busy ? "Bestellung wird verarbeitet..." : "Kostenpflichtig bestellen"}
           </button>
+          {order && (
+            <p className="success">
+              Bestellung angenommen: {order.orderId}. Den Bearbeitungsstatus sieht das Admin-Team im Monitor.
+            </p>
+          )}
           {error && <p className="error">{error}</p>}
         </aside>
-      </section>
+      </form>
+    </section>
+  );
+}
 
-      <section className="monitor">
+function PaymentFields({ paymentDetails, provider, setPaymentDetails }) {
+  if (provider === "paypal") {
+    return (
+      <div className="payment-box">
         <div className="panel-title">
-          <ReceiptText size={18} />
+          <CreditCard size={16} />
+          <strong>PayPal Sandbox</strong>
+        </div>
+        <TextInput
+          label="PayPal Sandbox E-Mail"
+          type="email"
+          value={paymentDetails.paypal.paypalEmail}
+          onChange={(value) =>
+            setPaymentDetails({
+              ...paymentDetails,
+              paypal: { ...paymentDetails.paypal, paypalEmail: value },
+            })
+          }
+        />
+        <p className="muted">Die eigentliche Zahlung laeuft ueber den Billing-Service gegen PayPal Sandbox Credentials.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="payment-box">
+      <div className="panel-title">
+        <CreditCard size={16} />
+        <strong>Stripe Sandbox</strong>
+      </div>
+      <TextInput
+        label="Karteninhaber"
+        value={paymentDetails.stripe.cardholder}
+        onChange={(value) =>
+          setPaymentDetails({
+            ...paymentDetails,
+            stripe: { ...paymentDetails.stripe, cardholder: value },
+          })
+        }
+      />
+      <label className="field">
+        <span>Test-Zahlungsmethode</span>
+        <select
+          value={paymentDetails.stripe.testPaymentMethod}
+          onChange={(event) =>
+            setPaymentDetails({
+              ...paymentDetails,
+              stripe: { ...paymentDetails.stripe, testPaymentMethod: event.target.value },
+            })
+          }
+        >
+          <option value="pm_card_visa">Visa Erfolg</option>
+          <option value="pm_card_chargeDeclined">Karte abgelehnt</option>
+          <option value="pm_card_authenticationRequired">3D Secure erforderlich</option>
+        </select>
+      </label>
+      <p className="muted">Es werden keine echten Kartennummern im Shop gespeichert.</p>
+    </div>
+  );
+}
+
+function TextInput({ label, onChange, required = true, type = "text", value }) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <input required={required} type={type} value={value || ""} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function AdminPage() {
+  const [session, setSession] = useState({ authenticated: false });
+  const [credentials, setCredentials] = useState({ username: "admin", password: "" });
+  const [orders, setOrders] = useState([]);
+  const [selectedOrder, setSelectedOrder] = useState(null);
+  const [timeline, setTimeline] = useState([]);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    fetch(`${SHOP_API}/admin/session`, { credentials: "include" })
+      .then((response) => (response.ok ? response.json() : { authenticated: false }))
+      .then(setSession)
+      .catch(() => setSession({ authenticated: false }));
+  }, []);
+
+  useEffect(() => {
+    if (!session.authenticated) return;
+    loadOrders();
+  }, [session.authenticated]);
+
+  async function login(event) {
+    event.preventDefault();
+    setError("");
+    const response = await fetch(`${SHOP_API}/admin/login`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(credentials),
+    });
+    if (!response.ok) {
+      setError("Login fehlgeschlagen.");
+      return;
+    }
+    setSession(await response.json());
+  }
+
+  async function logout() {
+    await fetch(`${SHOP_API}/admin/logout`, { method: "POST", credentials: "include" });
+    setSession({ authenticated: false });
+    setOrders([]);
+    setSelectedOrder(null);
+    setTimeline([]);
+  }
+
+  async function loadOrders() {
+    const response = await fetch(`${SHOP_API}/admin/orders`, { credentials: "include" });
+    if (!response.ok) {
+      setError("Admin-Bestellungen konnten nicht geladen werden.");
+      return;
+    }
+    setOrders(await response.json());
+  }
+
+  async function selectOrder(order) {
+    setSelectedOrder(order);
+    const response = await fetch(`${SHOP_API}/admin/orders/${order.orderId}/audit`, { credentials: "include" });
+    if (response.ok) {
+      const audit = await response.json();
+      setTimeline(audit.snapshots || []);
+    }
+  }
+
+  if (!session.authenticated) {
+    return (
+      <section className="admin-login">
+        <form className="login-box" onSubmit={login}>
+          <div className="panel-title">
+            <Lock size={18} />
+            <h2>Admin Login</h2>
+          </div>
+          <TextInput label="Benutzername" value={credentials.username} onChange={(value) => setCredentials({ ...credentials, username: value })} />
+          <TextInput label="Passwort" type="password" value={credentials.password} onChange={(value) => setCredentials({ ...credentials, password: value })} />
+          <button className="checkout-button">Einloggen</button>
+          {error && <p className="error">{error}</p>}
+        </form>
+      </section>
+    );
+  }
+
+  return (
+    <section className="admin-page">
+      <div className="admin-header">
+        <div className="panel-title">
+          <ClipboardList size={18} />
           <h2>Bestellmonitor</h2>
         </div>
-        {order ? (
-          <div className="order-grid">
-            <span>Order</span><strong>{order.orderId}</strong>
-            <span>Status</span><strong>{order.status}</strong>
-            <span>Betrag</span><strong>{order.amount} {order.currency}</strong>
-            <span>Correlation</span><strong>{order.correlationId}</strong>
-          </div>
-        ) : (
-          <p className="muted">Noch keine Bestellung gestartet.</p>
-        )}
-        <div className="timeline">
-          {timeline.map((event) => (
-            <div className="event" key={event.id}>
-              <span>{event.eventType}</span>
-              <small>{event.service}</small>
-            </div>
+        <button className="link-button" onClick={logout}>
+          <LogOut size={16} />
+          Logout
+        </button>
+      </div>
+
+      <div className="admin-grid">
+        <div className="order-list">
+          {orders.map((entry) => (
+            <button
+              className={selectedOrder?.orderId === entry.orderId ? "order-row active" : "order-row"}
+              key={entry.orderId}
+              onClick={() => selectOrder(entry)}
+            >
+              <strong>{entry.status}</strong>
+              <span>{entry.customer?.firstName} {entry.customer?.lastName}</span>
+              <small>{entry.orderId}</small>
+            </button>
           ))}
         </div>
-      </section>
-    </main>
+
+        <div className="timeline-panel">
+          {selectedOrder ? (
+            <>
+              <div className="order-grid">
+                <span>Order</span><strong>{selectedOrder.orderId}</strong>
+                <span>Status</span><strong>{selectedOrder.status}</strong>
+                <span>Betrag</span><strong>{selectedOrder.amount} {selectedOrder.currency}</strong>
+                <span>Correlation</span><strong>{selectedOrder.correlationId}</strong>
+              </div>
+              <div className="timeline">
+                {timeline.map((event) => (
+                  <div className="event" key={event.id}>
+                    <span>{event.eventType}</span>
+                    <small>{event.service} // {event.statusCode}</small>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <p className="muted">Bestellung auswaehlen, um die Audit-Timeline zu sehen.</p>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 
