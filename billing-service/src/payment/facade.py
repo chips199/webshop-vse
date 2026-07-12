@@ -39,6 +39,25 @@ class PaymentFacade:
             raise ValueError("Current payment adapter does not support PayPal captures")
         return self._adapter.capture_order(paypal_order_id)
 
+    def create_stripe_session(
+        self,
+        reference_id: str,
+        amount: Decimal,
+        currency: str,
+        success_url: str | None = None,
+        cancel_url: str | None = None,
+        customer_email: str | None = None,
+        items: list[dict] | None = None,
+    ) -> dict:
+        if not hasattr(self._adapter, "create_session"):
+            raise ValueError("Current payment adapter does not support Stripe sessions")
+        return self._adapter.create_session(reference_id, amount, currency, success_url, cancel_url, customer_email, items)
+
+    def retrieve_stripe_session(self, session_id: str) -> dict:
+        if not hasattr(self._adapter, "retrieve_session"):
+            raise ValueError("Current payment adapter does not support Stripe sessions")
+        return self._adapter.retrieve_session(session_id)
+
     def refund(self, transaction_id: str, amount: Decimal) -> PaymentResult:
         return self._adapter.refund(transaction_id, amount)
 

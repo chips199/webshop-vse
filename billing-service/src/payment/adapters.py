@@ -39,6 +39,14 @@ class StripeAdapter(PaymentAdapter):
         payment_method: str | None = None,
         payment_metadata: dict | None = None,
     ) -> PaymentResult:
+        payment_metadata = payment_metadata or {}
+        if payment_metadata.get("stripeSessionId"):
+            return PaymentResult(
+                transaction_id=payment_metadata["stripeSessionId"],
+                provider=self.provider_name,
+                status=PaymentStatus.SUCCEEDED,
+                reason=f"Stripe checkout session {payment_metadata.get('stripeSessionStatus')} paid",
+            )
         if settings.stripe_secret_key:
             return self._charge_with_stripe(order_id, amount, currency, payment_method)
         return PaymentResult(
@@ -68,6 +76,94 @@ class StripeAdapter(PaymentAdapter):
             provider=self.provider_name,
             status=PaymentStatus.SUCCEEDED,
         )
+
+    def create_session(
+        self,
+        reference_id: str,
+        amount: Decimal,
+        currency: str,
+        success_url: str | None = None,
+        cancel_url: str | None = None,
+        customer_email: str | None = None,
+        items: list[dict] | None = None,
+    ) -> dict:
+        if not settings.stripe_secret_key:
+            return {
+                "sessionId": f"stripe-stub-{reference_id}",
+                "status": "complete",
+                "paymentStatus": "paid",
+                "checkoutUrl": success_url or "http://localhost:3000/checkout?stripe=approved",
+                "stub": True,
+            }
+
+        data = {
+            "mode": "payment",
+            "success_url": success_url or "http://localhost:3000/checkout?stripe=approved&session_id={CHECKOUT_SESSION_ID}",
+            "cancel_url": cancel_url or "http://localhost:3000/checkout?stripe=cancelled",
+            "client_reference_id": reference_id,
+            "payment_method_types[0]": "card",
+            "billing_address_collection": "required",
+            "shipping_address_collection[allowed_countries][0]": "DE",
+            "shipping_address_collection[allowed_countries][1]": "AT",
+            "shipping_address_collection[allowed_countries][2]": "CH",
+            "metadata[referenceId]": reference_id,
+        }
+        if customer_email:
+            data["customer_email"] = customer_email
+
+        line_items = items or [
+            {
+                "name": "Retro Parts Bestellung",
+                "amount": amount,
+                "quantity": 1,
+            }
+        ]
+        for index, item in enumerate(line_items):
+            item_amount = item.get("amount") or item.get("price") or amount
+            data[f"line_items[{index}][quantity]"] = int(item.get("quantity", 1))
+            data[f"line_items[{index}][price_data][currency]"] = currency.lower()
+            data[f"line_items[{index}][price_data][unit_amount]"] = _minor_units(Decimal(str(item_amount)))
+            data[f"line_items[{index}][price_data][product_data][name]"] = item.get("name", "Retro Parts Artikel")
+
+        body = self._request("https://api.stripe.com/v1/checkout/sessions", data)
+        return {
+            "sessionId": body["id"],
+            "status": body.get("status", "open"),
+            "paymentStatus": body.get("payment_status", "unpaid"),
+            "checkoutUrl": body.get("url"),
+            "stub": False,
+        }
+
+    def retrieve_session(self, session_id: str) -> dict:
+        if session_id.startswith("stripe-stub-"):
+            return {
+                "sessionId": session_id,
+                "status": "complete",
+                "paymentStatus": "paid",
+                "customer": {
+                    "firstName": "Ada",
+                    "lastName": "Lovelace",
+                    "email": "ada.lovelace@example.test",
+                },
+                "shippingAddress": {
+                    "street": "Retroallee",
+                    "houseNumber": "8",
+                    "postalCode": "10115",
+                    "city": "Berlin",
+                    "country": "DE",
+                },
+                "stub": True,
+            }
+
+        body = self._request(f"https://api.stripe.com/v1/checkout/sessions/{session_id}", {}, method="GET")
+        return {
+            "sessionId": body["id"],
+            "status": body.get("status"),
+            "paymentStatus": body.get("payment_status"),
+            "customer": _normalize_stripe_customer(body.get("customer_details", {})),
+            "shippingAddress": _normalize_stripe_shipping(_stripe_shipping_details(body)),
+            "stub": False,
+        }
 
     def _charge_with_stripe(
         self,
@@ -103,15 +199,16 @@ class StripeAdapter(PaymentAdapter):
             reason=f"Stripe PaymentIntent status {status}",
         )
 
-    def _request(self, url: str, data: dict) -> dict:
+    def _request(self, url: str, data: dict, method: str = "POST") -> dict:
+        encoded_data = urlencode(data).encode("utf-8") if method != "GET" else None
         request = Request(
             url,
-            data=urlencode(data).encode("utf-8"),
+            data=encoded_data,
             headers={
                 "Authorization": f"Bearer {settings.stripe_secret_key}",
                 "Content-Type": "application/x-www-form-urlencoded",
             },
-            method="POST",
+            method=method,
         )
         try:
             with urlopen(request, timeout=20) as response:
@@ -332,3 +429,49 @@ def _split_street_and_house_number(address_line: str) -> tuple[str, str]:
     if len(parts) == 2 and any(char.isdigit() for char in parts[1]):
         return parts[0], parts[1]
     return address_line.strip(), ""
+
+
+def _normalize_stripe_customer(customer_details: dict) -> dict:
+    name = customer_details.get("name") or ""
+    first_name, last_name = _split_full_name(name)
+    return {
+        "firstName": first_name,
+        "lastName": last_name,
+        "email": customer_details.get("email") or "",
+        "phone": customer_details.get("phone") or "",
+    }
+
+
+def _normalize_stripe_shipping(shipping_details: dict) -> dict:
+    address = shipping_details.get("address", {})
+    street, house_number = _split_street_and_house_number(address.get("line1") or "")
+    return {
+        "street": street or address.get("line1") or "Stripe-Adresse",
+        "houseNumber": house_number or "-",
+        "postalCode": address.get("postal_code") or "-",
+        "city": address.get("city") or "-",
+        "country": address.get("country") or "-",
+        "recipientName": shipping_details.get("name") or "",
+    }
+
+
+def _stripe_shipping_details(session: dict) -> dict:
+    if session.get("shipping_details"):
+        return session["shipping_details"]
+    collected = session.get("collected_information") or {}
+    if collected.get("shipping_details"):
+        return collected["shipping_details"]
+    customer_details = session.get("customer_details") or {}
+    if customer_details.get("address"):
+        return {
+            "address": customer_details["address"],
+            "name": customer_details.get("name") or "",
+        }
+    return {}
+
+
+def _split_full_name(name: str) -> tuple[str, str]:
+    parts = name.strip().split(" ", 1)
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    return name.strip() or "Stripe", "Kunde"

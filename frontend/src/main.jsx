@@ -9,7 +9,6 @@ import {
   Lock,
   LogOut,
   Minus,
-  PackageCheck,
   Plus,
   ReceiptText,
   ShieldCheck,
@@ -42,6 +41,9 @@ const emptyPaymentDetails = {
   stripe: {
     cardholder: "Ada Lovelace",
     testPaymentMethod: "pm_card_visa",
+    stripeSessionId: "",
+    stripeSessionStatus: "",
+    stripePaymentStatus: "",
   },
   paypal: {
     paypalEmail: "buyer@example.test",
@@ -105,6 +107,25 @@ function mapPayPalShippingAddress(address = {}) {
   };
 }
 
+function mapStripeCustomer(customer = {}) {
+  return {
+    firstName: customer.firstName || "Stripe",
+    lastName: customer.lastName || "Kunde",
+    email: customer.email || "stripe-buyer@example.test",
+    phone: customer.phone || "",
+  };
+}
+
+function mapStripeShippingAddress(address = {}) {
+  return {
+    street: address.street || "Stripe-Adresse",
+    houseNumber: address.houseNumber || "-",
+    postalCode: address.postalCode || "-",
+    city: address.city || "-",
+    country: address.country || "-",
+  };
+}
+
 function App() {
   const [path, setPath] = useState(window.location.pathname);
   const [products, setProducts] = useState([]);
@@ -118,6 +139,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const paypalReturnHandled = useRef("");
+  const stripeReturnHandled = useRef("");
 
   useEffect(() => {
     const onPopState = () => setPath(window.location.pathname);
@@ -215,8 +237,8 @@ function App() {
         payment: {
           provider: selectedProvider,
           mode: "sandbox",
-          status: selectedProvider === "paypal" ? selectedPayment.paypal.status || "COMPLETED" : "SANDBOX_CONFIRMED",
-          transactionId: selectedProvider === "paypal" ? selectedPayment.paypal.paypalCaptureId : selectedPayment.stripe.testPaymentMethod,
+          status: selectedProvider === "paypal" ? selectedPayment.paypal.status || "COMPLETED" : selectedPayment.stripe.stripePaymentStatus || "paid",
+          transactionId: selectedProvider === "paypal" ? selectedPayment.paypal.paypalCaptureId : selectedPayment.stripe.stripeSessionId,
         },
         total,
       });
@@ -237,7 +259,92 @@ function App() {
       await startPayPalCheckout();
       return;
     }
+    if (provider === "stripe" && !paymentDetails.stripe.stripeSessionId) {
+      await startStripeCheckout();
+      return;
+    }
     await createShopOrder();
+  }
+
+  async function startStripeCheckout() {
+    if (cartItems.length === 0 || total <= 0) return;
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`${BILLING_API}/stripe/sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          referenceId: crypto.randomUUID(),
+          amount: total.toFixed(2),
+          currency: "EUR",
+          successUrl: `${window.location.origin}/checkout?stripe=approved&session_id={CHECKOUT_SESSION_ID}`,
+          cancelUrl: `${window.location.origin}/checkout?stripe=cancelled`,
+          customerEmail: customer.email,
+          items: cartItems.map((item) => ({
+            name: item.name,
+            amount: item.price,
+            quantity: item.quantity,
+          })),
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`Stripe Checkout Session konnte nicht erstellt werden: HTTP ${response.status}`);
+      }
+      const created = await response.json();
+      setPaymentDetails({
+        ...paymentDetails,
+        stripe: {
+          ...paymentDetails.stripe,
+          stripeSessionId: created.sessionId,
+          stripeSessionStatus: created.status,
+          stripePaymentStatus: created.paymentStatus,
+        },
+      });
+      if (created.checkoutUrl) {
+        window.location.assign(created.checkoutUrl);
+        return;
+      }
+      await verifyStripeAndCreateOrder(created.sessionId);
+    } catch (caught) {
+      setError(caught.message);
+      setBusy(false);
+    }
+  }
+
+  async function verifyStripeAndCreateOrder(sessionId) {
+    setProvider("stripe");
+    setBusy(true);
+    setError("");
+    const response = await fetch(`${BILLING_API}/stripe/sessions/${sessionId}`);
+    if (!response.ok) {
+      throw new Error(`Stripe Checkout Session konnte nicht geprueft werden: HTTP ${response.status}`);
+    }
+    const session = await response.json();
+    if (session.paymentStatus !== "paid") {
+      throw new Error(`Stripe-Zahlung ist nicht bezahlt: ${session.paymentStatus || "unknown"}`);
+    }
+    const stripeCustomer = mapStripeCustomer(session.customer);
+    const stripeShippingAddress = mapStripeShippingAddress(session.shippingAddress);
+    const nextPaymentDetails = {
+      ...paymentDetails,
+      stripe: {
+        ...paymentDetails.stripe,
+        cardholder: `${stripeCustomer.firstName} ${stripeCustomer.lastName}`.trim(),
+        stripeSessionId: session.sessionId,
+        stripeSessionStatus: session.status,
+        stripePaymentStatus: session.paymentStatus,
+      },
+    };
+    setCustomer(stripeCustomer);
+    setShippingAddress(stripeShippingAddress);
+    setPaymentDetails(nextPaymentDetails);
+    await createShopOrder({
+      customerOverride: stripeCustomer,
+      shippingAddressOverride: stripeShippingAddress,
+      paymentOverride: nextPaymentDetails,
+      providerOverride: "stripe",
+    });
   }
 
   async function startPayPalCheckout() {
@@ -257,7 +364,7 @@ function App() {
         }),
       });
       if (!response.ok) {
-        throw new Error(`PayPal Sandbox Order konnte nicht erstellt werden: HTTP ${response.status}`);
+        throw new Error(`PayPal-Zahlung konnte nicht gestartet werden: HTTP ${response.status}`);
       }
       const created = await response.json();
       setPaymentDetails({
@@ -287,7 +394,7 @@ function App() {
     setError("");
     const response = await fetch(`${BILLING_API}/paypal/orders/${paypalOrderId}/capture`, { method: "POST" });
     if (!response.ok) {
-      throw new Error(`PayPal Sandbox Capture fehlgeschlagen: HTTP ${response.status}`);
+      throw new Error(`PayPal-Zahlung konnte nicht bestaetigt werden: HTTP ${response.status}`);
     }
     const captured = await response.json();
     const paypalCustomer = mapPayPalCustomer(captured.payer);
@@ -332,6 +439,25 @@ function App() {
     });
   }, [path, cartItems.length]);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const stripeState = params.get("stripe");
+    const sessionId = params.get("session_id");
+    if (path === "/checkout" && stripeState === "cancelled") {
+      setError("Stripe-Zahlung wurde abgebrochen.");
+      window.history.replaceState({}, "", "/checkout");
+      return;
+    }
+    if (path !== "/checkout" || stripeState !== "approved" || !sessionId || cartItems.length === 0) return;
+    if (stripeReturnHandled.current === sessionId) return;
+    stripeReturnHandled.current = sessionId;
+
+    verifyStripeAndCreateOrder(sessionId).catch((caught) => {
+      setError(caught.message);
+      setBusy(false);
+    });
+  }, [path, cartItems.length]);
+
   return (
     <main className="terminal-shell">
       <Header path={path} />
@@ -349,21 +475,15 @@ function App() {
       ) : path === "/checkout" ? (
         <CheckoutPage
           cartItems={cartItems}
-          customer={customer}
           error={error}
           order={order}
-          paymentDetails={paymentDetails}
           provider={provider}
-          setCustomer={setCustomer}
-          setPaymentDetails={setPaymentDetails}
           setProvider={setProvider}
-          setShippingAddress={setShippingAddress}
-          shippingAddress={shippingAddress}
           submitOrder={submitOrder}
           startPayPalCheckout={startPayPalCheckout}
+          startStripeCheckout={startStripeCheckout}
           total={total}
           busy={busy}
-          setError={setError}
         />
       ) : path.startsWith("/products/") ? (
         <ProductDetailPage
@@ -636,19 +756,13 @@ function CartPage({ cartItems, changeQuantity, removeFromCart, total }) {
 function CheckoutPage({
   busy,
   cartItems,
-  customer,
   error,
   order,
-  paymentDetails,
   provider,
-  setCustomer,
-  setPaymentDetails,
   setProvider,
-  setShippingAddress,
-  shippingAddress,
   startPayPalCheckout,
+  startStripeCheckout,
   submitOrder,
-  setError,
   total,
 }) {
   return (
@@ -672,61 +786,12 @@ function CheckoutPage({
             </button>
           </div>
           <PaymentFields
-            paymentDetails={paymentDetails}
             provider={provider}
-            setPaymentDetails={setPaymentDetails}
-            setError={setError}
             startPayPalCheckout={startPayPalCheckout}
+            startStripeCheckout={startStripeCheckout}
             total={total}
           />
         </section>
-
-        {provider === "paypal" ? (
-          <section className="form-section">
-            <div className="panel-title">
-              <ReceiptText size={18} />
-              <h2>Kontakt</h2>
-            </div>
-            <p className="muted">Name und E-Mail werden nach der Sandbox-Zahlung direkt aus PayPal uebernommen.</p>
-          </section>
-        ) : (
-          <section className="form-section">
-            <div className="panel-title">
-              <ReceiptText size={18} />
-              <h2>Kontakt</h2>
-            </div>
-            <div className="form-grid">
-              <TextInput label="Vorname" value={customer.firstName} onChange={(value) => setCustomer({ ...customer, firstName: value })} />
-              <TextInput label="Nachname" value={customer.lastName} onChange={(value) => setCustomer({ ...customer, lastName: value })} />
-              <TextInput label="E-Mail" type="email" value={customer.email} onChange={(value) => setCustomer({ ...customer, email: value })} />
-              <TextInput label="Telefon" value={customer.phone} required={false} onChange={(value) => setCustomer({ ...customer, phone: value })} />
-            </div>
-          </section>
-        )}
-
-        {provider === "paypal" ? (
-          <section className="form-section">
-            <div className="panel-title">
-              <PackageCheck size={18} />
-              <h2>Lieferadresse</h2>
-            </div>
-            <p className="muted">Die Lieferadresse wird nach der Sandbox-Zahlung direkt aus PayPal uebernommen.</p>
-          </section>
-        ) : (
-          <section className="form-section">
-            <div className="panel-title">
-              <PackageCheck size={18} />
-              <h2>Lieferadresse</h2>
-            </div>
-            <div className="form-grid">
-              <TextInput label="Strasse" value={shippingAddress.street} onChange={(value) => setShippingAddress({ ...shippingAddress, street: value })} />
-              <TextInput label="Hausnummer" value={shippingAddress.houseNumber} onChange={(value) => setShippingAddress({ ...shippingAddress, houseNumber: value })} />
-              <TextInput label="PLZ" value={shippingAddress.postalCode} onChange={(value) => setShippingAddress({ ...shippingAddress, postalCode: value })} />
-              <TextInput label="Ort" value={shippingAddress.city} onChange={(value) => setShippingAddress({ ...shippingAddress, city: value })} />
-              <TextInput label="Land" value={shippingAddress.country} onChange={(value) => setShippingAddress({ ...shippingAddress, country: value })} />
-            </div>
-          </section>
-        )}
 
         <aside className="checkout-summary">
           <h2>Bestelluebersicht</h2>
@@ -749,11 +814,11 @@ function CheckoutPage({
             <strong>{formatPrice(total)}</strong>
           </div>
           <button className="checkout-button" disabled={busy || cartItems.length === 0}>
-            {busy ? "Bestellung wird verarbeitet..." : provider === "paypal" ? "Mit PayPal bezahlen" : "Kostenpflichtig bestellen"}
+            {busy ? "Bestellung wird verarbeitet..." : provider === "paypal" ? "Mit PayPal bezahlen" : "Mit Stripe bezahlen"}
           </button>
           {order && (
             <p className="success">
-              Bestellung angenommen: {order.orderId}. Den Bearbeitungsstatus sieht das Admin-Team im Monitor.
+              Bestellung angenommen: {order.orderId}.
             </p>
           )}
           {error && <p className="error">{error}</p>}
@@ -791,7 +856,7 @@ function OrderConfirmationPage({ confirmation }) {
             <ReceiptText size={22} />
             <h2>Bestellung bestaetigt</h2>
           </div>
-          <p className="success">Zahlung erfolgreich erfasst. Deine Bestellung wurde im Shop-System angelegt.</p>
+          <p className="success">Zahlung erfolgreich. Deine Bestellung wurde angelegt.</p>
         </div>
 
         <div className="confirmation-grid">
@@ -801,11 +866,11 @@ function OrderConfirmationPage({ confirmation }) {
           </div>
           <div className="confirmation-block">
             <span>Status</span>
-            <strong>{order.status}</strong>
+            <strong>Bezahlt</strong>
           </div>
           <div className="confirmation-block">
             <span>Zahlung</span>
-            <strong>{payment.provider.toUpperCase()} // {payment.status}</strong>
+            <strong>{payment.provider === "paypal" ? "PayPal" : "Stripe"}</strong>
           </div>
           <div className="confirmation-block">
             <span>Betrag</span>
@@ -845,20 +910,9 @@ function OrderConfirmationPage({ confirmation }) {
           </section>
         </div>
 
-        <section className="confirmation-section">
-          <h3>Technische Referenzen</h3>
-          <div className="order-grid">
-            <span>Correlation</span><strong>{order.correlationId}</strong>
-            <span>Payment Ref</span><strong>{payment.transactionId || "-"}</strong>
-          </div>
-        </section>
-
         <div className="confirmation-actions">
           <button className="secondary-button" onClick={() => navigate("/")}>
             Weiter einkaufen
-          </button>
-          <button className="checkout-button compact" onClick={() => navigate("/admin")}>
-            Im Adminmonitor pruefen
           </button>
         </div>
       </section>
@@ -866,26 +920,20 @@ function OrderConfirmationPage({ confirmation }) {
   );
 }
 
-function PaymentFields({ paymentDetails, provider, setPaymentDetails, startPayPalCheckout, total }) {
+function PaymentFields({ provider, startPayPalCheckout, startStripeCheckout, total }) {
   if (provider === "paypal") {
     return (
       <div className="payment-box">
         <div className="panel-title">
           <CreditCard size={16} />
-          <strong>PayPal Sandbox</strong>
+          <strong>PayPal</strong>
         </div>
         <div className="paypal-actions">
           <button className="add-button" type="button" disabled={total <= 0} onClick={startPayPalCheckout}>
             Zu PayPal wechseln
           </button>
         </div>
-        {paymentDetails.paypal.paypalOrderId && (
-          <p className="muted">PayPal Order: {paymentDetails.paypal.paypalOrderId}</p>
-        )}
-        {paymentDetails.paypal.paypalCaptureId && (
-          <p className="success">PayPal Capture bereit: {paymentDetails.paypal.paypalCaptureId}</p>
-        )}
-        <p className="muted">Nach der Freigabe kommst du automatisch zurueck, die Zahlung wird erfasst und die Bestellung wird angelegt.</p>
+        <p className="muted">Du wirst zur sicheren Zahlung weitergeleitet und kommst danach automatisch zur Bestellbestaetigung zurueck.</p>
       </div>
     );
   }
@@ -893,35 +941,14 @@ function PaymentFields({ paymentDetails, provider, setPaymentDetails, startPayPa
     <div className="payment-box">
       <div className="panel-title">
         <CreditCard size={16} />
-        <strong>Stripe Sandbox</strong>
+        <strong>Stripe</strong>
       </div>
-      <TextInput
-        label="Karteninhaber"
-        value={paymentDetails.stripe.cardholder}
-        onChange={(value) =>
-          setPaymentDetails({
-            ...paymentDetails,
-            stripe: { ...paymentDetails.stripe, cardholder: value },
-          })
-        }
-      />
-      <label className="field">
-        <span>Test-Zahlungsmethode</span>
-        <select
-          value={paymentDetails.stripe.testPaymentMethod}
-          onChange={(event) =>
-            setPaymentDetails({
-              ...paymentDetails,
-              stripe: { ...paymentDetails.stripe, testPaymentMethod: event.target.value },
-            })
-          }
-        >
-          <option value="pm_card_visa">Visa Erfolg</option>
-          <option value="pm_card_chargeDeclined">Karte abgelehnt</option>
-          <option value="pm_card_authenticationRequired">3D Secure erforderlich</option>
-        </select>
-      </label>
-      <p className="muted">Es werden keine echten Kartennummern im Shop gespeichert.</p>
+      <div className="paypal-actions">
+        <button className="add-button" type="button" disabled={total <= 0} onClick={startStripeCheckout}>
+          Zu Stripe wechseln
+        </button>
+      </div>
+      <p className="muted">Du wirst zur sicheren Zahlung weitergeleitet und kommst danach automatisch zur Bestellbestaetigung zurueck.</p>
     </div>
   );
 }

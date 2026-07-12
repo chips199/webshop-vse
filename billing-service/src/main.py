@@ -188,6 +188,39 @@ class PayPalCaptureResponse(BaseModel):
     stub: bool = False
 
 
+class StripeCheckoutItem(BaseModel):
+    name: str
+    amount: str
+    quantity: int = 1
+
+
+class StripeCreateSessionRequest(BaseModel):
+    referenceId: str
+    amount: str
+    currency: str = "EUR"
+    successUrl: str | None = None
+    cancelUrl: str | None = None
+    customerEmail: str | None = None
+    items: list[StripeCheckoutItem] | None = None
+
+
+class StripeCreateSessionResponse(BaseModel):
+    sessionId: str
+    status: str
+    paymentStatus: str
+    checkoutUrl: str | None = None
+    stub: bool = False
+
+
+class StripeSessionResponse(BaseModel):
+    sessionId: str
+    status: str | None = None
+    paymentStatus: str | None = None
+    customer: dict | None = None
+    shippingAddress: dict | None = None
+    stub: bool = False
+
+
 @app.middleware("http")
 async def correlation_id_middleware(request: Request, call_next):
     correlation_id = request.headers.get("X-Correlation-Id") or str(uuid4())
@@ -237,3 +270,31 @@ async def capture_paypal_order(paypalOrderId: str) -> PayPalCaptureResponse:
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return PayPalCaptureResponse(**result)
+
+
+@app.post("/stripe/sessions", response_model=StripeCreateSessionResponse)
+async def create_stripe_session(request: StripeCreateSessionRequest) -> StripeCreateSessionResponse:
+    facade = get_payment_facade("stripe")
+    try:
+        result = facade.create_stripe_session(
+            request.referenceId,
+            Decimal(request.amount),
+            request.currency,
+            request.successUrl,
+            request.cancelUrl,
+            request.customerEmail,
+            [item.model_dump() for item in request.items] if request.items else None,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return StripeCreateSessionResponse(**result)
+
+
+@app.get("/stripe/sessions/{sessionId}", response_model=StripeSessionResponse)
+async def get_stripe_session(sessionId: str) -> StripeSessionResponse:
+    facade = get_payment_facade("stripe")
+    try:
+        result = facade.retrieve_stripe_session(sessionId)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return StripeSessionResponse(**result)
