@@ -4,7 +4,7 @@
 
 Das System simuliert den Bestellprozess eines Online-Shops mit klar getrennten
 Microservices. Die Umsetzung nutzt Python/FastAPI fuer die Backend-Services,
-React fuer ein spaeteres Admin-Dashboard, PostgreSQL fuer Persistenz, RabbitMQ
+React fuer Shop und Admin-Dashboard, PostgreSQL fuer Persistenz, RabbitMQ
 fuer interne Service-Kommunikation und Docker Compose fuer das lokale Deployment.
 
 Die interne Kommunikation wird bewusst event- und command-basiert ueber RabbitMQ
@@ -20,8 +20,8 @@ flowchart LR
     Admin[Admin]
     Frontend[React Frontend]
     Services[FastAPI Microservices]
-    Stripe[Stripe Stub]
-    PayPal[PayPal Stub]
+    Stripe[Stripe Sandbox oder Stub]
+    PayPal[PayPal Sandbox oder Stub]
 
     Customer -->|Bestellung aufgeben| Frontend
     Admin -->|Audit-Timeline ansehen| Frontend
@@ -44,26 +44,26 @@ flowchart LR
     Rabbit --> Audit[Audit-Service<br/>FastAPI]
 
     Billing --> Facade[Payment-Fassade]
-    Facade --> Stripe[StripeAdapter Stub]
-    Facade --> PayPal[PayPalAdapter Stub]
+    Facade --> Stripe[StripeAdapter<br/>Sandbox oder Stub]
+    Facade --> PayPal[PayPalAdapter<br/>Sandbox oder Stub]
 
-    Audit --> AuditDb[(PostgreSQL<br/>Audit Snapshots)]
-    Shop --> ShopDb[(PostgreSQL<br/>Orders)]
-    Warehouse --> WarehouseDb[(PostgreSQL<br/>Stock/Reservations)]
-    Billing --> BillingDb[(PostgreSQL<br/>Payments)]
-    Invoice --> InvoiceDb[(PostgreSQL<br/>Invoices)]
+    Audit --> AuditDb[(PostgreSQL<br/>audit_service)]
+    Shop --> ShopDb[(PostgreSQL<br/>shop_service)]
+    Warehouse --> WarehouseDb[(PostgreSQL<br/>warehouse_service)]
+    Billing --> BillingDb[(PostgreSQL<br/>billing_service)]
+    Invoice --> InvoiceDb[(PostgreSQL<br/>invoice_service)]
 ```
 
 ### Verantwortlichkeiten
 
 | Komponente | Verantwortlichkeit |
 | --- | --- |
-| React Frontend | Externe UI fuer Bestellung und spaeter Admin-Dashboard |
-| Shop-Service | Externe Order API, correlationId, Order-Status, Saga-Orchestrierung |
-| Warehouse-Service | Bestand pruefen, Reservierung anlegen, stornieren und final ausbuchen |
-| Billing-Service | Zahlungsfluss, Payment-Fassade, Refunds |
-| Invoice-Service | Rechnungserstellung nach erfolgreicher Zahlung |
-| Audit-Service | Unveraenderliche Audit-Snapshots chronologisch bereitstellen |
+| React Frontend | Externe UI fuer Bestellung und Admin-Dashboard |
+| Shop-Service | Externe Order API, Produktkatalog, correlationId, Order-Status, Saga-Orchestrierung; DB `shop_service` |
+| Warehouse-Service | Bestand pruefen, Reservierung anlegen, stornieren und final ausbuchen; DB `warehouse_service` vorbereitet |
+| Billing-Service | Zahlungsfluss, Payment-Fassade, Checkout-Sessions, Refunds; DB `billing_service` vorbereitet |
+| Invoice-Service | PDF-Rechnungserstellung, persistente Invoice-Metadaten und Retry-Mechanismus; DB `invoice_service` |
+| Audit-Service | Unveraenderliche Audit-Snapshots chronologisch bereitstellen; DB `audit_service` |
 | RabbitMQ | Commands und Domain-Events zwischen Services |
 | PostgreSQL | Persistenz pro Service, mindestens Audit-Snapshot-Speicher |
 
@@ -115,13 +115,13 @@ sequenceDiagram
     MQ-->>Billing: billing.payment.requested
     Billing->>Billing: Payment-Fassade charge()
     Billing->>MQ: billing.payment.succeeded
-    Billing->>MQ: invoice.create.requested
     Billing->>MQ: audit PAYMENT_SUCCEEDED
+    MQ-->>Shop: billing.payment.succeeded
+    Shop->>MQ: invoice.create.requested
     MQ-->>Invoice: invoice.create.requested
     Invoice->>Invoice: PDF-Rechnung erzeugen und speichern
     Invoice->>MQ: invoice.created
     Invoice->>MQ: audit INVOICE_CREATED
-    MQ-->>Shop: billing.payment.succeeded
     Shop->>MQ: warehouse.commit.requested
     MQ-->>Warehouse: warehouse.commit.requested
     Warehouse->>Warehouse: Reservierte Artikel ausbuchen
@@ -171,7 +171,8 @@ sequenceDiagram
 
 Der Billing-Service kapselt alle Zahlungsanbieter hinter einer gemeinsamen
 Fassade. Der Billing-Kern arbeitet nur mit eigenen Domaenentypen und kennt keine
-anbieter-spezifischen Payloads.
+anbieter-spezifischen Payloads. Stripe und PayPal koennen gegen echte Sandboxen
+laufen, fallen ohne Credentials aber auf lokale Stub-Antworten zurueck.
 
 Pflichtoperationen:
 
@@ -186,6 +187,30 @@ Anbieter:
 
 Der aktive Anbieter wird per Konfiguration gesetzt, zum Beispiel
 `PAYMENT_PROVIDER=stripe` oder `PAYMENT_PROVIDER=paypal`.
+
+Adapter registrieren sich automatisch ueber die Basisklasse `PaymentAdapter`.
+Ein weiterer Anbieter wird als neue Adapterklasse mit eigenem `provider_name`
+hinzugefuegt; die Fassade selbst muss dafuer nicht geaendert werden.
+
+### API- und Fehlerkonventionen
+
+Alle Services liefern technische Fehler als RFC-7807-kompatible
+`application/problem+json`-Antworten. Die Antwort enthaelt `type`, `title`,
+`status`, `detail`, `instance` und die aktuelle `correlationId`.
+
+### Logging
+
+Alle Services schreiben strukturierte JSON-Logs auf die Konsole und in taeglich
+rotierende Log-Dateien unter `logs/<service>.log`. Die Aufbewahrung ist auf 14
+Tage konfiguriert.
+
+### Invoice-Retry und PDF-Rechnungen
+
+Der Invoice-Service erzeugt PDF-Rechnungen im Retro-Design als echte PDF-Dateien
+und speichert Metadaten in der Tabelle `invoices`. Schlaegt die Erzeugung fehl,
+werden bis zu drei Versuche ausgefuehrt. Jeder weitere Versuch erzeugt ein
+`invoice.retry.scheduled`-Event; nach dem letzten Fehler wird `invoice.failed`
+publiziert und vom Audit-Service als Snapshot persistiert.
 
 ## 8. Audit-Snapshots
 
@@ -212,13 +237,14 @@ Snapshot-Tabelle fachlich verboten.
 
 Ein weiterer Zahlungsanbieter wird hinzugefuegt, indem ein neuer Adapter im
 Billing-Service implementiert wird, der das bestehende Payment-Facade-Interface
-erfuellt. Anschliessend wird der Anbieter in der Provider-Konfiguration
-registriert und per `PAYMENT_PROVIDER` aktivierbar gemacht.
+erfuellt und einen eindeutigen `provider_name` setzt. Die Basisklasse
+registriert den Adapter automatisch; der Anbieter ist anschliessend per
+`PAYMENT_PROVIDER` aktivierbar.
 
 Zu aendern:
 
 - Neuer Adapter, z. B. `billing-service/src/payment/adyen_adapter.py`
-- Provider-Registrierung/Konfiguration
+- Optional Konfiguration fuer externe Credentials
 - Tests fuer Erfolg, Ablehnung und Timeout des neuen Anbieters
 
 Nicht zu aendern:
@@ -226,11 +252,11 @@ Nicht zu aendern:
 - Saga-Orchestrierung im Shop-Service
 - RabbitMQ-Command- und Event-Vertraege
 - Externe Shop- und Audit-APIs
-- Billing-Kernlogik, sofern sie nur gegen die Fassade programmiert
+- Payment-Fassade und Billing-Kernlogik, sofern sie nur gegen die Fassade programmiert
 
-## 10. Offene Punkte fuer Tag 2
+## 10. Bekannte Architekturabweichung
 
-- FastAPI-Service-Gerueste erzeugen.
-- Docker Compose mit Services, PostgreSQL und RabbitMQ befuellen.
-- Gemeinsame Logging- und Correlation-Id-Konventionen als Code vorbereiten.
-- Erste Datenbankschemata fuer Audit, Orders, Payments, Stock und Invoices anlegen.
+Das Aufgabenblatt sieht synchrone REST-Aufrufe von Shop zu Warehouse und Billing
+vor. Dieses Projekt nutzt fuer die interne Kommunikation konsequent RabbitMQ.
+Die Abweichung ist bewusst gewaehlt, weil dadurch Saga-Schritte, Kompensation und
+Audit-Snapshots einheitlich ueber Commands und Events abgebildet werden.

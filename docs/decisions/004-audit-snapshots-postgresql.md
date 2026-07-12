@@ -12,8 +12,9 @@ dauerhaft gespeichert werden.
 
 ## Decision
 
-Der Audit-Service speichert Snapshots in PostgreSQL. Jeder Snapshot wird nur
-eingefuegt. Updates und Deletes sind fachlich nicht erlaubt.
+Der Audit-Service speichert Snapshots in seiner eigenen PostgreSQL-Datenbank
+`audit_service`. Jeder Snapshot wird nur eingefuegt. Updates und Deletes sind
+fachlich nicht erlaubt.
 
 Die Snapshot-Daten enthalten mindestens `correlationId`, `eventType`, `service`,
 `timestamp`, `payload`, `previousEventId`, `actor` und `statusCode`.
@@ -21,5 +22,6 @@ Die Snapshot-Daten enthalten mindestens `correlationId`, `eventType`, `service`,
 ## Consequences
 
 PostgreSQL ermoeglicht robuste chronologische Abfragen und JSON-Payloads. Die
-Unveraenderlichkeit muss spaeter in Repository-Code und Datenbankrechten
+Unveraenderlichkeit ist im Code durch einen reinen Insert-Pfad umgesetzt und
+sollte fuer produktionsnaehere Umgebungen zusaetzlich ueber Datenbankrechte
 abgesichert werden.

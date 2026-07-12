@@ -13,6 +13,7 @@ from .config import settings
 from .database import get_snapshots_by_correlation_id, init_database, insert_snapshot_from_message
 from .logging_config import configure_logging
 from .messaging import consume_audit_events
+from .problem_details import register_problem_handlers
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Audit Service API", version="0.1.0", lifespan=lifespan)
+register_problem_handlers(app)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],

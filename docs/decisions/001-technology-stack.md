@@ -16,8 +16,8 @@ Wir verwenden:
 
 - Python als Backend-Sprache
 - FastAPI fuer alle Backend-Services
-- React fuer das spaetere Frontend/Admin-Dashboard
-- PostgreSQL fuer relationale Persistenz
+- React fuer Shop-Oberflaeche und Admin-Dashboard
+- PostgreSQL fuer relationale Persistenz mit getrennten Datenbanken pro Service
 - Docker Compose fuer lokales Deployment
 - RabbitMQ fuer Messaging
 - OpenAPI 3.0 fuer API-Dokumentation
@@ -28,5 +28,8 @@ Wir verwenden:
 FastAPI liefert OpenAPI-Dokumentation direkt aus den Services heraus und ist gut
 fuer kleine, klar geschnittene Microservices geeignet. PostgreSQL erfuellt die
 Pflichtanforderung einer relationalen Datenbank und passt gut zum
-Audit-Snapshot-Modell. Docker Compose macht die Abgabe in einer frischen
+Audit-Snapshot-Modell. Die Services nutzen getrennte Datenbanknamen
+(`shop_service`, `warehouse_service`, `billing_service`, `invoice_service`,
+`audit_service`), damit Ownership und spaetere Migrationen pro Service
+nachvollziehbar bleiben. Docker Compose macht die Abgabe in einer frischen
 Umgebung nachvollziehbar.

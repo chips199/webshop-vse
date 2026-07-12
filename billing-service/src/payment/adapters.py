@@ -10,6 +10,13 @@ from .models import PaymentResult, PaymentStatus
 
 class PaymentAdapter:
     provider_name: str
+    registry: dict[str, type["PaymentAdapter"]] = {}
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        super().__init_subclass__(**kwargs)
+        provider_name = getattr(cls, "provider_name", None)
+        if provider_name:
+            PaymentAdapter.registry[provider_name] = cls
 
     def charge(
         self,
@@ -40,6 +47,9 @@ class StripeAdapter(PaymentAdapter):
         payment_metadata: dict | None = None,
     ) -> PaymentResult:
         payment_metadata = payment_metadata or {}
+        simulated = _simulated_result(self.provider_name, order_id, payment_metadata)
+        if simulated:
+            return simulated
         if payment_metadata.get("stripeSessionId"):
             return PaymentResult(
                 transaction_id=payment_metadata["stripeSessionId"],
@@ -229,6 +239,9 @@ class PayPalAdapter(PaymentAdapter):
         payment_metadata: dict | None = None,
     ) -> PaymentResult:
         payment_metadata = payment_metadata or {}
+        simulated = _simulated_result(self.provider_name, order_id, payment_metadata)
+        if simulated:
+            return simulated
         if payment_metadata.get("paypalCaptureId"):
             return PaymentResult(
                 transaction_id=payment_metadata["paypalCaptureId"],
@@ -399,6 +412,25 @@ class PayPalAdapter(PaymentAdapter):
 
 def _minor_units(amount: Decimal) -> int:
     return int((amount * Decimal("100")).quantize(Decimal("1")))
+
+
+def _simulated_result(provider: str, order_id: str, payment_metadata: dict) -> PaymentResult | None:
+    scenario = payment_metadata.get("scenario")
+    if scenario == "payment_failed":
+        return PaymentResult(
+            transaction_id=f"{provider}-{order_id}",
+            provider=provider,
+            status=PaymentStatus.FAILED,
+            reason="PAYMENT_DECLINED",
+        )
+    if scenario == "payment_timeout":
+        return PaymentResult(
+            transaction_id=f"{provider}-{order_id}",
+            provider=provider,
+            status=PaymentStatus.FAILED,
+            reason="PAYMENT_TIMEOUT",
+        )
+    return None
 
 
 def _normalize_paypal_payer(payer: dict) -> dict:

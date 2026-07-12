@@ -1,20 +1,29 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  Activity,
+  AlertTriangle,
   ArrowLeft,
+  Boxes,
+  Clock3,
   ClipboardList,
   CreditCard,
   Cpu,
   Eye,
+  FileText,
   Lock,
   LogOut,
   Minus,
   Plus,
   ReceiptText,
+  RefreshCw,
+  Search,
   ShieldCheck,
   ShoppingCart,
   Terminal,
   Trash2,
+  Truck,
+  User,
 } from "lucide-react";
 import "./styles.css";
 
@@ -56,6 +65,25 @@ const emptyPaymentDetails = {
 
 function formatPrice(value, currency = "EUR") {
   return `${Number(value).toFixed(2)} ${currency}`;
+}
+
+function formatDateTime(value) {
+  if (!value) return "-";
+  return new Intl.DateTimeFormat("de-DE", {
+    dateStyle: "short",
+    timeStyle: "medium",
+  }).format(new Date(value));
+}
+
+function statusTone(status = "") {
+  if (["COMPLETED"].includes(status)) return "success";
+  if (["PAYMENT_FAILED", "OUT_OF_STOCK", "REFUND_FAILED", "ROLLBACK_COMPLETED"].includes(status)) return "danger";
+  if (["INVOICE_RETRY_PENDING", "REFUND_PENDING"].includes(status)) return "warning";
+  return "pending";
+}
+
+function shortId(value = "") {
+  return value ? `${value.slice(0, 8)}...${value.slice(-6)}` : "-";
 }
 
 function navigate(path) {
@@ -969,6 +997,9 @@ function AdminPage() {
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [timeline, setTimeline] = useState([]);
   const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     fetch(`${SHOP_API}/admin/session`, { credentials: "include" })
@@ -981,6 +1012,41 @@ function AdminPage() {
     if (!session.authenticated) return;
     loadOrders();
   }, [session.authenticated]);
+
+  const statusOptions = useMemo(() => ["all", ...Array.from(new Set(orders.map((entry) => entry.status))).sort()], [orders]);
+  const filteredOrders = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase();
+    return orders.filter((entry) => {
+      const matchesStatus = statusFilter === "all" || entry.status === statusFilter;
+      const haystack = [
+        entry.orderId,
+        entry.correlationId,
+        entry.status,
+        entry.customer?.firstName,
+        entry.customer?.lastName,
+        entry.customer?.email,
+        entry.transactionId,
+        entry.invoiceId,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return matchesStatus && (!normalizedSearch || haystack.includes(normalizedSearch));
+    });
+  }, [orders, search, statusFilter]);
+  const dashboardStats = useMemo(() => {
+    const completed = orders.filter((entry) => entry.status === "COMPLETED");
+    const open = orders.filter((entry) => !["COMPLETED", "PAYMENT_FAILED", "OUT_OF_STOCK", "ROLLBACK_COMPLETED"].includes(entry.status));
+    const failed = orders.filter((entry) => ["PAYMENT_FAILED", "OUT_OF_STOCK", "REFUND_FAILED", "ROLLBACK_COMPLETED"].includes(entry.status));
+    const revenue = completed.reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+    return {
+      total: orders.length,
+      completed: completed.length,
+      open: open.length,
+      failed: failed.length,
+      revenue,
+    };
+  }, [orders]);
 
   async function login(event) {
     event.preventDefault();
@@ -1007,20 +1073,29 @@ function AdminPage() {
   }
 
   async function loadOrders() {
+    setLoading(true);
     const response = await fetch(`${SHOP_API}/admin/orders`, { credentials: "include" });
+    setLoading(false);
     if (!response.ok) {
       setError("Admin-Bestellungen konnten nicht geladen werden.");
       return;
     }
-    setOrders(await response.json());
+    const loadedOrders = await response.json();
+    setOrders(loadedOrders);
+    if (!selectedOrder && loadedOrders.length > 0) {
+      await selectOrder(loadedOrders[0]);
+    }
   }
 
   async function selectOrder(order) {
     setSelectedOrder(order);
+    setTimeline([]);
     const response = await fetch(`${SHOP_API}/admin/orders/${order.orderId}/audit`, { credentials: "include" });
     if (response.ok) {
       const audit = await response.json();
       setTimeline(audit.snapshots || []);
+    } else {
+      setError("Audit-Timeline konnte nicht geladen werden.");
     }
   }
 
@@ -1045,55 +1120,183 @@ function AdminPage() {
     <section className="admin-page">
       <div className="admin-header">
         <div className="panel-title">
-          <ClipboardList size={18} />
-          <h2>Bestellmonitor</h2>
+          <Activity size={18} />
+          <h2>Admin Dashboard</h2>
         </div>
-        <button className="link-button" onClick={logout}>
-          <LogOut size={16} />
-          Logout
-        </button>
+        <div className="admin-actions">
+          <button className="link-button" onClick={loadOrders} disabled={loading}>
+            <RefreshCw size={16} />
+            Aktualisieren
+          </button>
+          <button className="link-button" onClick={logout}>
+            <LogOut size={16} />
+            Logout
+          </button>
+        </div>
+      </div>
+
+      {error && <p className="error">{error}</p>}
+
+      <div className="admin-metrics">
+        <Metric icon={<ClipboardList size={18} />} label="Bestellungen" value={dashboardStats.total} />
+        <Metric icon={<ShieldCheck size={18} />} label="Abgeschlossen" value={dashboardStats.completed} tone="success" />
+        <Metric icon={<Clock3 size={18} />} label="In Bearbeitung" value={dashboardStats.open} tone="warning" />
+        <Metric icon={<AlertTriangle size={18} />} label="Auffaellig" value={dashboardStats.failed} tone="danger" />
+        <Metric icon={<CreditCard size={18} />} label="Umsatz" value={formatPrice(dashboardStats.revenue)} />
+      </div>
+
+      <div className="admin-toolbar">
+        <label className="admin-search">
+          <Search size={16} />
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Order, Kunde, Transaktion suchen" />
+        </label>
+        <label className="admin-filter">
+          <span>Status</span>
+          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+            {statusOptions.map((option) => (
+              <option key={option} value={option}>
+                {option === "all" ? "Alle" : option}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       <div className="admin-grid">
-        <div className="order-list">
-          {orders.map((entry) => (
+        <aside className="order-list">
+          {filteredOrders.map((entry) => (
             <button
               className={selectedOrder?.orderId === entry.orderId ? "order-row active" : "order-row"}
               key={entry.orderId}
               onClick={() => selectOrder(entry)}
             >
-              <strong>{entry.status}</strong>
-              <span>{entry.customer?.firstName} {entry.customer?.lastName}</span>
-              <small>{entry.orderId}</small>
+              <span className={`status-pill ${statusTone(entry.status)}`}>{entry.status}</span>
+              <strong>{entry.customer?.firstName} {entry.customer?.lastName}</strong>
+              <small>{formatDateTime(entry.createdAt)} // {formatPrice(entry.amount, entry.currency)}</small>
+              <small>{shortId(entry.orderId)}</small>
             </button>
           ))}
-        </div>
+          {filteredOrders.length === 0 && <p className="muted">Keine Bestellung passt zum Filter.</p>}
+        </aside>
 
-        <div className="timeline-panel">
-          {selectedOrder ? (
-            <>
-              <div className="order-grid">
-                <span>Order</span><strong>{selectedOrder.orderId}</strong>
-                <span>Status</span><strong>{selectedOrder.status}</strong>
-                <span>Betrag</span><strong>{selectedOrder.amount} {selectedOrder.currency}</strong>
-                <span>Correlation</span><strong>{selectedOrder.correlationId}</strong>
-              </div>
-              <div className="timeline">
-                {timeline.map((event) => (
-                  <div className="event" key={event.id}>
-                    <span>{event.eventType}</span>
-                    <small>{event.service} // {event.statusCode}</small>
-                  </div>
-                ))}
-              </div>
-            </>
-          ) : (
-            <p className="muted">Bestellung auswaehlen, um die Audit-Timeline zu sehen.</p>
-          )}
-        </div>
+        <OrderAdminDetail order={selectedOrder} timeline={timeline} />
       </div>
     </section>
   );
+}
+
+function Metric({ icon, label, tone = "", value }) {
+  return (
+    <div className={`metric ${tone}`}>
+      {icon}
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function OrderAdminDetail({ order, timeline }) {
+  if (!order) {
+    return (
+      <div className="timeline-panel admin-empty">
+        <ClipboardList size={26} />
+        <p className="muted">Bestellung auswaehlen, um Kundendaten, Zahlungsstatus und Audit-Timeline zu sehen.</p>
+      </div>
+    );
+  }
+  const items = order.items || [];
+  const payment = order.payment || {};
+  return (
+    <div className="admin-detail">
+      <section className="timeline-panel">
+        <div className="detail-header">
+          <div>
+            <span className={`status-pill ${statusTone(order.status)}`}>{order.status}</span>
+            <h2>{shortId(order.orderId)}</h2>
+          </div>
+          <strong>{formatPrice(order.amount, order.currency)}</strong>
+        </div>
+        <div className="order-grid">
+          <span>Order-ID</span><strong>{order.orderId}</strong>
+          <span>Correlation-ID</span><strong>{order.correlationId}</strong>
+          <span>Erstellt</span><strong>{formatDateTime(order.createdAt)}</strong>
+          <span>Aktualisiert</span><strong>{formatDateTime(order.updatedAt)}</strong>
+          <span>Payment</span><strong>{payment.provider || "-"} // {payment.mode || "-"}</strong>
+          <span>Transaktion</span><strong>{order.transactionId || "-"}</strong>
+          <span>Rechnung</span><strong>{order.invoiceId || "-"} {order.invoiceStatus ? `// ${order.invoiceStatus}` : ""}</strong>
+          <span>Warehouse</span><strong>{order.warehouseCommitStatus || "-"}</strong>
+        </div>
+      </section>
+
+      <section className="admin-detail-grid">
+        <InfoPanel icon={<User size={17} />} title="Kunde">
+          <p>{order.customer?.firstName} {order.customer?.lastName}</p>
+          <p>{order.customer?.email || "-"}</p>
+          <p>{order.customer?.phone || "-"}</p>
+        </InfoPanel>
+        <InfoPanel icon={<Truck size={17} />} title="Lieferadresse">
+          <p>{formatAddress(order.shippingAddress)}</p>
+        </InfoPanel>
+        <InfoPanel icon={<Boxes size={17} />} title="Artikel">
+          <ul className="admin-items">
+            {items.map((item) => (
+              <li key={item.productId}>
+                <span>{item.quantity}x {item.name}</span>
+                <strong>{formatPrice(item.lineTotal || Number(item.unitPrice || 0) * Number(item.quantity || 0), order.currency)}</strong>
+              </li>
+            ))}
+          </ul>
+        </InfoPanel>
+        <InfoPanel icon={<FileText size={17} />} title="Audit">
+          <p>{timeline.length} Snapshots</p>
+          <p>Letztes Event: {timeline.at(-1)?.eventType || "-"}</p>
+        </InfoPanel>
+      </section>
+
+      <section className="timeline-panel">
+        <div className="panel-title">
+          <ReceiptText size={17} />
+          <h2>Audit Timeline</h2>
+        </div>
+        <div className="timeline">
+          {timeline.map((event, index) => (
+            <div className={`event ${event.statusCode?.toLowerCase() || ""}`} key={event.id}>
+              <div className="event-index">{String(index + 1).padStart(2, "0")}</div>
+              <span>{event.eventType}</span>
+              <small>{event.service} // {event.statusCode}</small>
+              <small>{formatDateTime(event.timestamp)}</small>
+              <details>
+                <summary>Payload</summary>
+                <pre>{JSON.stringify(event.payload || {}, null, 2)}</pre>
+              </details>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function InfoPanel({ children, icon, title }) {
+  return (
+    <div className="info-panel">
+      <div className="panel-title">
+        {icon}
+        <strong>{title}</strong>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function formatAddress(address = {}) {
+  return [
+    `${address.street || "-"} ${address.houseNumber || ""}`.trim(),
+    `${address.postalCode || ""} ${address.city || ""}`.trim(),
+    address.country || "",
+  ]
+    .filter(Boolean)
+    .join(", ");
 }
 
 createRoot(document.getElementById("root")).render(<App />);

@@ -43,9 +43,12 @@ wird.
 
 3. Ein Computerteil in den Warenkorb legen.
 4. Payment-Anbieter waehlen.
-5. Szenario auswaehlen.
-6. Bestellung starten.
-7. Status und Audit-Timeline im Bestellmonitor beobachten.
+5. Bestellung starten und ueber PayPal- oder Stripe-Sandbox abschliessen.
+6. Nach der Rueckleitung die Bestellbestaetigung pruefen.
+7. Den Bestellmonitor ueber die geschuetzte Admin-Seite pruefen.
+
+Die Fehlerszenarien werden nicht in der Kundenoberflaeche angeboten. Sie bleiben
+fuer Smoke-Tests und technische Abnahme ueber definierte Request-Werte erhalten.
 
 ## Automatisierte Smoke-Pruefung
 

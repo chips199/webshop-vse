@@ -19,6 +19,10 @@ Commands fordern Arbeit an, Events dokumentieren Ergebnisse. Jeder Message
 Envelope enthaelt `messageId`, `correlationId`, `type`, `sourceService`,
 `timestamp`, `payload` und `previousEventId`.
 
+Fehler, die retryfaehig sind, werden ebenfalls ueber RabbitMQ sichtbar gemacht,
+zum Beispiel durch `invoice.retry.scheduled`. Der Invoice-Service versucht die
+PDF-Erzeugung mehrfach und publiziert erst danach ein finales `invoice.failed`.
+
 ## Consequences
 
 Diese Entscheidung entkoppelt Services staerker und macht Audit-Events

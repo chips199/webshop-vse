@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from .adapters import PayPalAdapter, PaymentAdapter, StripeAdapter
+from .adapters import PaymentAdapter
 from .models import PaymentResult
 
 
@@ -66,12 +66,9 @@ class PaymentFacade:
 
 
 def get_payment_facade(provider: str) -> PaymentFacade:
-    adapters: dict[str, PaymentAdapter] = {
-        "stripe": StripeAdapter(),
-        "paypal": PayPalAdapter(),
-    }
     try:
-        return PaymentFacade(adapters[provider.lower()])
+        adapter_class = PaymentAdapter.registry[provider.lower()]
+        return PaymentFacade(adapter_class())
     except KeyError as exc:
-        supported = ", ".join(sorted(adapters))
+        supported = ", ".join(sorted(PaymentAdapter.registry))
         raise ValueError(f"Unsupported payment provider '{provider}'. Supported: {supported}") from exc

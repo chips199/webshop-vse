@@ -349,6 +349,29 @@ components:
           type: object
         shippingAddress:
           type: object
+        billingAddress:
+          type: object
+          nullable: true
+        items:
+          type: array
+          items:
+            type: object
+        payment:
+          type: object
+          nullable: true
+        transactionId:
+          type: string
+          nullable: true
+        invoiceId:
+          type: string
+          format: uuid
+          nullable: true
+        invoiceStatus:
+          type: string
+          nullable: true
+        warehouseCommitStatus:
+          type: string
+          nullable: true
         createdAt:
           type: string
           format: date-time

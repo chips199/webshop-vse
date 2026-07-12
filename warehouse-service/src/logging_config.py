@@ -1,6 +1,8 @@
 import json
 import logging
+from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from .config import settings
@@ -20,11 +22,23 @@ class JsonFormatter(logging.Formatter):
 
 
 def configure_logging() -> None:
-    handler = logging.StreamHandler()
-    handler.setFormatter(JsonFormatter())
+    formatter = JsonFormatter()
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+
+    log_dir = Path("logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    file_handler = TimedRotatingFileHandler(
+        log_dir / f"{settings.service_name}.log",
+        when="midnight",
+        backupCount=14,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(formatter)
 
     root = logging.getLogger()
     root.handlers.clear()
-    root.addHandler(handler)
+    root.addHandler(stream_handler)
+    root.addHandler(file_handler)
     root.setLevel(logging.INFO)
     logging.getLogger("pika").setLevel(logging.WARNING)

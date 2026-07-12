@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from .config import settings
 from .logging_config import configure_logging
 from .messaging import build_message, consume_messages, publish_message
+from .problem_details import register_problem_handlers
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -129,6 +130,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Warehouse Service API", version="0.1.0", lifespan=lifespan)
+register_problem_handlers(app)
 
 
 class HealthResponse(BaseModel):

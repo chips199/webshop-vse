@@ -679,16 +679,102 @@ h2 {
   justify-content: space-between;
 }
 
+.admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.admin-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.metric {
+  min-height: 96px;
+  border: 2px solid #315f2d;
+  background: #071907;
+  display: grid;
+  align-content: space-between;
+  gap: 8px;
+  padding: 12px;
+}
+
+.metric svg {
+  color: #70f05b;
+}
+
+.metric span {
+  color: #77c96a;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.metric strong {
+  min-width: 0;
+  font-size: 22px;
+  overflow-wrap: anywhere;
+}
+
+.metric.success {
+  border-color: #70f05b;
+}
+
+.metric.warning {
+  border-color: #e8d86a;
+}
+
+.metric.danger {
+  border-color: #ff8f8f;
+}
+
+.admin-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 10px;
+}
+
+.admin-search,
+.admin-filter {
+  min-height: 44px;
+  border: 2px solid #315f2d;
+  background: #020802;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+}
+
+.admin-search input,
+.admin-filter select {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  color: #baff6f;
+  background: transparent;
+  outline: 0;
+}
+
+.admin-filter span {
+  color: #77c96a;
+}
+
 .admin-grid {
   display: grid;
-  grid-template-columns: 380px minmax(0, 1fr);
+  grid-template-columns: 360px minmax(0, 1fr);
   gap: 14px;
+  align-items: start;
 }
 
 .order-list {
   display: grid;
   gap: 8px;
   align-content: start;
+  max-height: 760px;
+  overflow: auto;
+  padding-right: 4px;
 }
 
 .order-row {
@@ -705,6 +791,7 @@ h2 {
 .order-row:hover,
 .order-row.active {
   border-color: #70f05b;
+  box-shadow: inset 4px 0 0 #70f05b;
 }
 
 .order-row small,
@@ -724,6 +811,100 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.admin-detail {
+  display: grid;
+  gap: 14px;
+}
+
+.detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid #315f2d;
+  padding-bottom: 12px;
+}
+
+.detail-header h2 {
+  margin-top: 8px;
+}
+
+.admin-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.info-panel {
+  min-height: 132px;
+  border: 1px solid #315f2d;
+  background: #071907;
+  padding: 12px;
+}
+
+.info-panel p {
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.admin-items {
+  padding: 0;
+  margin: 10px 0 0;
+  list-style: none;
+}
+
+.admin-items li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  border-top: 1px solid #315f2d;
+  padding: 8px 0;
+}
+
+.admin-items span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.status-pill {
+  width: fit-content;
+  max-width: 100%;
+  min-height: 26px;
+  border: 1px solid #70f05b;
+  color: #061006;
+  background: #70f05b;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.status-pill.pending {
+  color: #baff6f;
+  background: #102e0f;
+}
+
+.status-pill.warning {
+  border-color: #e8d86a;
+  color: #181505;
+  background: #e8d86a;
+}
+
+.status-pill.danger {
+  border-color: #ff8f8f;
+  color: #240909;
+  background: #ff8f8f;
+}
+
+.admin-empty {
+  min-height: 320px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+
 .timeline {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
@@ -732,10 +913,26 @@ h2 {
 }
 
 .event {
-  min-height: 64px;
+  min-height: 112px;
   padding: 10px;
   border: 1px solid #315f2d;
   background: #071907;
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.event.failure {
+  border-color: #ff8f8f;
+}
+
+.event.retry {
+  border-color: #e8d86a;
+}
+
+.event.compensating,
+.event.compensated {
+  border-color: #7fc7ff;
 }
 
 .event span {
@@ -743,10 +940,42 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.event-index {
+  width: 34px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  color: #061006;
+  background: #70f05b;
+  font-weight: 700;
+}
+
+.event details {
+  border-top: 1px solid #315f2d;
+  padding-top: 6px;
+}
+
+.event summary {
+  color: #77c96a;
+  cursor: pointer;
+}
+
+.event pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: 8px 0 0;
+  color: #baff6f;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 940px) {
   .shop-layout,
   .checkout-form,
   .admin-grid,
+  .admin-metrics,
+  .admin-toolbar,
+  .admin-detail-grid,
   .detail-panel,
   .cart-editor-row,
   .confirmation-grid,

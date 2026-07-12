@@ -1,9 +1,13 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
 import logging
 import secrets
 import threading
+from urllib.error import HTTPError, URLError
+from urllib.request import Request as UrlRequest
+from urllib.request import urlopen
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
@@ -13,7 +17,7 @@ from pydantic import BaseModel, Field
 from .config import settings
 from .database import calculate_total, create_admin_session, delete_admin_session
 from .database import create_order as create_order_record
-from .database import enrich_items_from_products, get_admin_session, get_audit_snapshots_for_order, get_products
+from .database import enrich_items_from_products, get_admin_session, get_products
 from .database import complete_order_if_ready
 from .database import list_admin_orders, verify_admin_credentials
 from .database import get_order as get_order_record
@@ -21,6 +25,7 @@ from .database import init_database, update_order_status
 from .database import update_invoice_created, update_payment_succeeded, update_warehouse_commit
 from .logging_config import configure_logging
 from .messaging import build_message, consume_messages, publish_message
+from .problem_details import register_problem_handlers
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -217,6 +222,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Historical Computer Parts Shop API", version="0.1.0", lifespan=lifespan)
+register_problem_handlers(app)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
@@ -317,6 +323,9 @@ class AdminOrderResponse(BaseModel):
     currency: str
     customer: dict | None = None
     shippingAddress: dict | None = None
+    billingAddress: dict | None = None
+    items: list[dict] = []
+    payment: dict | None = None
     transactionId: str | None = None
     invoiceId: str | None = None
     invoiceStatus: str | None = None
@@ -496,7 +505,7 @@ async def admin_order_audit(orderId: str, _: str = Depends(require_admin)) -> Ad
         raise HTTPException(status_code=404, detail=f"Order {orderId} not found")
     return AdminAuditResponse(
         orderId=orderId,
-        snapshots=[_serialize_snapshot(snapshot) for snapshot in get_audit_snapshots_for_order(orderId)],
+        snapshots=fetch_audit_snapshots(str(order["correlationId"])),
     )
 
 
@@ -526,3 +535,14 @@ def _serialize_snapshot(snapshot: dict) -> dict:
         "previousEventId": str(snapshot["previousEventId"]) if snapshot.get("previousEventId") else None,
         "timestamp": snapshot["timestamp"].isoformat(),
     }
+
+
+def fetch_audit_snapshots(correlation_id: str) -> list[dict]:
+    url = f"{settings.audit_service_url.rstrip('/')}/audit/orders/{correlation_id}"
+    request = UrlRequest(url, headers={"X-Correlation-Id": correlation_id})
+    try:
+        with urlopen(request, timeout=5) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise HTTPException(status_code=502, detail=f"Audit service unavailable: {exc}") from exc
+    return body.get("snapshots", [])

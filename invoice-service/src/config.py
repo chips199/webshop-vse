@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     service_port: int = 8003
     database_url: str = "postgresql://webshop:webshop@localhost:5432/webshop"
     rabbitmq_url: str = "amqp://webshop:webshop@localhost:5672/"
+    invoice_output_dir: str = "invoices"
+    invoice_max_retries: int = 3
 
 
 settings = Settings()

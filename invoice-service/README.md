@@ -11,10 +11,13 @@ messages are consumed from RabbitMQ.
 ## RabbitMQ
 
 - Consumes `invoice.create.requested`
+- Publishes `invoice.retry.scheduled`
 - Publishes `invoice.created`
+- Publishes `invoice.failed`
 
-Invoices are currently written as simple text files in the container-local
-`invoices/` directory. This is a PDF-generation placeholder for the core flow.
+Invoices are rendered as retro-styled PDF files and stored in the configured
+invoice output directory. Metadata and retry status are stored in the
+`invoice_service` PostgreSQL database.
 
 ## Configuration
 
@@ -22,3 +25,5 @@ Invoices are currently written as simple text files in the container-local
 - `SERVICE_PORT`
 - `DATABASE_URL`
 - `RABBITMQ_URL`
+- `INVOICE_OUTPUT_DIR`
+- `INVOICE_MAX_RETRIES`

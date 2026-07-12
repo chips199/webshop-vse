@@ -61,7 +61,7 @@ components:
           example: invoice-service
     InvoiceResponse:
       type: object
-      required: [invoiceId, orderId, correlationId, status]
+      required: [invoiceId, orderId, correlationId, status, attempts]
       properties:
         invoiceId:
           type: string
@@ -74,8 +74,14 @@ components:
           format: uuid
         status:
           type: string
-          enum: [CREATED, FAILED]
+          enum: [PROCESSING, RETRYING, CREATED, FAILED]
         pdfPath:
+          type: string
+          nullable: true
+        attempts:
+          type: integer
+          minimum: 0
+        lastError:
           type: string
           nullable: true
     ProblemDetails:
