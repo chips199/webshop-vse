@@ -26,11 +26,17 @@ from .database import update_invoice_created, update_payment_succeeded, update_w
 from .logging_config import configure_logging
 from .messaging import build_message, consume_messages, publish_message
 from .problem_details import register_problem_handlers
+from .resilience import CircuitBreaker, CircuitBreakerOpenError
 
 configure_logging()
 logger = logging.getLogger(__name__)
 stop_consumer_event = threading.Event()
 consumer_thread: threading.Thread | None = None
+invoice_circuit_breaker = CircuitBreaker(
+    failure_threshold=settings.invoice_circuit_breaker_failure_threshold,
+    reset_seconds=settings.invoice_circuit_breaker_reset_seconds,
+    half_open_max_calls=settings.invoice_circuit_breaker_half_open_max_calls,
+)
 
 
 def handle_saga_message(message: dict) -> None:
@@ -65,21 +71,7 @@ def handle_saga_message(message: dict) -> None:
     if message_type == "billing.payment.succeeded":
         order_id = payload["orderId"]
         update_payment_succeeded(order_id, payload["transactionId"])
-
-        invoice_requested = build_message(
-            "invoice.create.requested",
-            correlation_id,
-            {
-                "orderId": order_id,
-                "transactionId": payload["transactionId"],
-                "provider": payload["provider"],
-                "amount": payload["amount"],
-                "currency": payload["currency"],
-                "scenario": payload.get("scenario", "happy_path"),
-            },
-            previous_event_id=message["messageId"],
-        )
-        publish_message("invoice.create.requested", invoice_requested)
+        request_invoice_with_circuit(order_id, correlation_id, payload, message)
 
         commit_requested = build_message(
             "warehouse.commit.requested",
@@ -119,11 +111,15 @@ def handle_saga_message(message: dict) -> None:
 
     if message_type == "invoice.created":
         order_id = payload["orderId"]
+        transition = invoice_circuit_breaker.record_success()
+        publish_invoice_circuit_transition(correlation_id, order_id, transition, message["messageId"])
         update_invoice_created(order_id, payload["invoiceId"])
         maybe_publish_order_completed(order_id, correlation_id, message)
         return
 
     if message_type == "invoice.failed":
+        transition = invoice_circuit_breaker.record_failure(payload.get("reasonCode", "INVOICE_FAILED"))
+        publish_invoice_circuit_transition(correlation_id, payload["orderId"], transition, message["messageId"])
         update_order_status(payload["orderId"], "INVOICE_RETRY_PENDING")
         return
 
@@ -185,6 +181,58 @@ def maybe_publish_order_completed(order_id: str, correlation_id: str, previous_m
         previous_event_id=previous_message["messageId"],
     )
     publish_message("order.completed", order_completed)
+
+
+def request_invoice_with_circuit(order_id: str, correlation_id: str, payload: dict, previous_message: dict) -> None:
+    try:
+        transition = invoice_circuit_breaker.before_call()
+        publish_invoice_circuit_transition(correlation_id, order_id, transition, previous_message["messageId"])
+    except CircuitBreakerOpenError as exc:
+        update_order_status(order_id, "INVOICE_RETRY_PENDING")
+        logger.warning(
+            "Invoice request blocked by circuit breaker",
+            extra={"correlation_id": correlation_id, "context": {"orderId": order_id, "error": str(exc)}},
+        )
+        return
+
+    invoice_requested = build_message(
+        "invoice.create.requested",
+        correlation_id,
+        {
+            "orderId": order_id,
+            "transactionId": payload["transactionId"],
+            "provider": payload["provider"],
+            "amount": payload["amount"],
+            "currency": payload["currency"],
+            "scenario": payload.get("scenario", "happy_path"),
+        },
+        previous_event_id=previous_message["messageId"],
+    )
+    publish_message("invoice.create.requested", invoice_requested)
+
+
+def publish_invoice_circuit_transition(
+    correlation_id: str,
+    order_id: str | None,
+    transition,
+    previous_event_id: str,
+) -> None:
+    if transition is None:
+        return
+    event = build_message(
+        "invoice.circuit.state.changed",
+        correlation_id,
+        {
+            "circuitName": "invoice-service",
+            "orderId": order_id,
+            "previousState": transition.previous_state.value,
+            "state": transition.state.value,
+            "failureCount": transition.failure_count,
+            "reasonCode": transition.reason,
+        },
+        previous_event_id=previous_event_id,
+    )
+    publish_message("invoice.circuit.state.changed", event)
 
 
 @asynccontextmanager

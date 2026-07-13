@@ -44,6 +44,7 @@ Alle Commands und Events verwenden denselben Envelope:
 | `invoice.created` | Invoice-Service | Shop-Service, Audit-Service | Rechnung erfolgreich erstellt |
 | `invoice.retry.scheduled` | Invoice-Service | Audit-Service | Wiederholversuch fuer Rechnungserstellung vorgemerkt |
 | `invoice.failed` | Invoice-Service | Shop-Service, Audit-Service | Rechnungserstellung fehlgeschlagen |
+| `invoice.circuit.state.changed` | Shop-Service | Audit-Service | Circuit-Breaker-Zustand fuer Invoice-Service hat gewechselt |
 | `order.completed` | Shop-Service | Audit-Service | Bestellung erfolgreich abgeschlossen |
 | `order.rollback.completed` | Shop-Service | Audit-Service | Kompensation abgeschlossen |
 
@@ -94,3 +95,8 @@ stehen.
 Fehler-Events enthalten einen stabilen `reasonCode` und eine lesbare `message`.
 Kompensierende Commands und Events verwenden dieselbe `correlationId` und setzen
 `previousEventId` auf das Ereignis, das die Kompensation ausgeloest hat.
+
+Retry-Events enthalten zusaetzlich `attempt` und `maxAttempts`.
+Circuit-Breaker-Events enthalten `circuitName`, `previousState`, `state`,
+`failureCount` und `reasonCode`, damit im Audit sichtbar bleibt, wann der
+Invoice-Service-Circuit nach `OPEN`, `HALF_OPEN` oder `CLOSED` gewechselt ist.

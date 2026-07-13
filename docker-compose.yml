@@ -38,6 +38,9 @@ services:
       DATABASE_URL: postgresql://webshop:webshop@postgres:5432/shop_service
       RABBITMQ_URL: amqp://webshop:webshop@rabbitmq:5672/
       AUDIT_SERVICE_URL: http://audit-service:8004
+      INVOICE_CIRCUIT_BREAKER_FAILURE_THRESHOLD: 3
+      INVOICE_CIRCUIT_BREAKER_RESET_SECONDS: 30
+      INVOICE_CIRCUIT_BREAKER_HALF_OPEN_MAX_CALLS: 1
       ADMIN_USERNAME: admin
       ADMIN_PASSWORD: admin123
       ADMIN_COOKIE_SECURE: "false"

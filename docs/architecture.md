@@ -212,6 +212,19 @@ werden bis zu drei Versuche ausgefuehrt. Jeder weitere Versuch erzeugt ein
 `invoice.retry.scheduled`-Event; nach dem letzten Fehler wird `invoice.failed`
 publiziert und vom Audit-Service als Snapshot persistiert.
 
+### Circuit Breaker fuer den Invoice-Service
+
+Der Shop-Service schuetzt den Aufruf des Invoice-Service mit einem eigenen
+Circuit Breaker. Nach drei aufeinanderfolgenden `invoice.failed`-Ereignissen
+wechselt der Circuit nach `OPEN`; neue `invoice.create.requested`-Commands
+werden dann nicht mehr an den Invoice-Service gesendet. Nach 30 Sekunden erlaubt
+der Circuit automatisch den naechsten Testaufruf im Zustand `HALF_OPEN`. Ein
+erfolgreiches `invoice.created` schliesst den Circuit wieder, ein erneutes
+`invoice.failed` oeffnet ihn erneut.
+
+Jeder Zustandswechsel wird als `invoice.circuit.state.changed` veroeffentlicht
+und dadurch vom Audit-Service als Snapshot persistiert.
+
 ## 8. Audit-Snapshots
 
 Jeder relevante Zustandsuebergang erzeugt ein Audit-Event. Der Audit-Service
