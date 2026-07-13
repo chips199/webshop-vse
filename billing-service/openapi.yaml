@@ -120,6 +120,30 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StripeSessionResponse"
+  /webhooks/payment-stub:
+    post:
+      summary: Receive asynchronous payment stub confirmation
+      operationId: receiveAsyncPaymentWebhook
+      description: Internal webhook endpoint used by the async-stub provider to continue the RabbitMQ saga after a delayed payment result.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AsyncPaymentWebhookRequest"
+      responses:
+        "200":
+          description: Webhook accepted and translated to billing.payment.succeeded or billing.payment.failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsyncPaymentWebhookResponse"
+        "400":
+          description: Unsupported payment status
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
 components:
   schemas:
     HealthResponse:
@@ -140,7 +164,7 @@ components:
           type: string
         provider:
           type: string
-          enum: [paypal, stripe]
+          enum: [paypal, stripe, async-stub]
         status:
           type: string
           enum: [PENDING, SUCCEEDED, FAILED, REFUNDED]
@@ -262,6 +286,49 @@ components:
           nullable: true
         stub:
           type: boolean
+    AsyncPaymentWebhookRequest:
+      type: object
+      required: [orderId, transactionId, provider, amount, currency, status, correlationId]
+      properties:
+        orderId:
+          type: string
+        transactionId:
+          type: string
+        provider:
+          type: string
+          default: async-stub
+        amount:
+          type: string
+          example: "49.90"
+        currency:
+          type: string
+          default: EUR
+        status:
+          type: string
+          enum: [SUCCEEDED, FAILED]
+        correlationId:
+          type: string
+        previousEventId:
+          type: string
+          nullable: true
+        reasonCode:
+          type: string
+          nullable: true
+        message:
+          type: string
+          nullable: true
+        scenario:
+          type: string
+          default: async_webhook
+    AsyncPaymentWebhookResponse:
+      type: object
+      required: [accepted, eventType]
+      properties:
+        accepted:
+          type: boolean
+        eventType:
+          type: string
+          enum: [billing.payment.succeeded, billing.payment.failed]
     ProblemDetails:
       type: object
       required: [type, title, status]

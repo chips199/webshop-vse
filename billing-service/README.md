@@ -1,9 +1,9 @@
 # Billing Service
 
-FastAPI service for payment processing through a payment facade. PayPal and
-Stripe are available behind the facade. With sandbox credentials the adapters
-call Stripe/PayPal sandbox APIs; without credentials they fall back to
-deterministic local stubs.
+FastAPI service for payment processing through a payment facade. PayPal, Stripe
+and an asynchronous webhook stub are available behind the facade. With sandbox
+credentials the adapters call Stripe/PayPal sandbox APIs; without credentials
+they fall back to deterministic local stubs.
 
 ## Local endpoints
 
@@ -13,6 +13,7 @@ deterministic local stubs.
 - `POST /paypal/orders/{paypalOrderId}/capture`
 - `POST /stripe/sessions`
 - `GET /stripe/sessions/{sessionId}`
+- `POST /webhooks/payment-stub`
 
 ## Configuration
 
@@ -26,6 +27,22 @@ deterministic local stubs.
 - `PAYPAL_CLIENT_ID`
 - `PAYPAL_CLIENT_SECRET`
 - `PAYPAL_BASE_URL`
+- `ASYNC_PAYMENT_WEBHOOK_URL`
+- `ASYNC_PAYMENT_WEBHOOK_DELAY_SECONDS`
+
+## Async webhook stub
+
+Set `PAYMENT_PROVIDER=async-stub` to simulate an asynchronous payment provider.
+`charge()` returns `PENDING` immediately. After
+`ASYNC_PAYMENT_WEBHOOK_DELAY_SECONDS`, the stub posts to
+`ASYNC_PAYMENT_WEBHOOK_URL`. The Billing-Service then publishes
+`billing.payment.succeeded` or `billing.payment.failed` and the existing Saga
+continues through RabbitMQ.
+
+For tests, pass `webhookStatus` in the payment metadata:
+
+- `webhookStatus=SUCCEEDED`
+- `webhookStatus=FAILED`
 
 ## Payment provider extension
 

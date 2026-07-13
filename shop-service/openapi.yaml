@@ -271,7 +271,7 @@ components:
       properties:
         provider:
           type: string
-          enum: [paypal, stripe]
+          enum: [paypal, stripe, async-stub]
         currency:
           type: string
           example: EUR
@@ -304,6 +304,16 @@ components:
         status:
           type: string
           description: Last known PayPal sandbox status.
+        webhookStatus:
+          type: string
+          enum: [SUCCEEDED, FAILED]
+          description: Test-only final status for the async-stub payment provider.
+        webhookReasonCode:
+          type: string
+          description: Test-only reason code for a failed async-stub webhook.
+        webhookMessage:
+          type: string
+          description: Test-only message for a failed async-stub webhook.
     OrderResponse:
       type: object
       required: [orderId, correlationId, status]

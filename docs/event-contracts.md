@@ -90,6 +90,32 @@ Der Payload enthaelt nur die fachlichen Zahlungsdaten:
 Payload wiederholt, weil sie bereits fuer jede Message einheitlich im Envelope
 stehen.
 
+### Asynchrone Zahlungsbestaetigung
+
+Der Anbieter `async-stub` bestaetigt Zahlungen nicht direkt im Rueckgabewert von
+`charge()`. Der erste Aufruf liefert intern `PENDING`; der Billing-Service
+publiziert dabei noch kein Payment-Event. Nach der konfigurierten Verzoegerung
+sendet der Stub einen HTTP-Webhook an den Billing-Service. Erst dieser Webhook
+wird in eines der bestehenden RabbitMQ-Events uebersetzt:
+
+- `billing.payment.succeeded`
+- `billing.payment.failed`
+
+Beispiel fuer den internen Webhook-Request:
+
+```json
+{
+  "orderId": "f102c63a-8321-4e64-8fb6-d95a0b8d1f09",
+  "transactionId": "async-stub-f102c63a-8321-4e64-8fb6-d95a0b8d1f09",
+  "provider": "async-stub",
+  "amount": "49.90",
+  "currency": "EUR",
+  "status": "SUCCEEDED",
+  "correlationId": "65c40581-4e0d-4a7f-8e9e-0c79fe412c73",
+  "previousEventId": "ab8d54de-a7b4-49b4-91d2-7166c43f99bd"
+}
+```
+
 ## Fehler und Kompensation
 
 Fehler-Events enthalten einen stabilen `reasonCode` und eine lesbare `message`.

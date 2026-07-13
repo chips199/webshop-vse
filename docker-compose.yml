@@ -80,6 +80,8 @@ services:
       PAYPAL_CLIENT_ID: ${PAYPAL_CLIENT_ID:-}
       PAYPAL_CLIENT_SECRET: ${PAYPAL_CLIENT_SECRET:-}
       PAYPAL_BASE_URL: ${PAYPAL_BASE_URL:-https://api-m.sandbox.paypal.com}
+      ASYNC_PAYMENT_WEBHOOK_URL: http://billing-service:8002/webhooks/payment-stub
+      ASYNC_PAYMENT_WEBHOOK_DELAY_SECONDS: ${ASYNC_PAYMENT_WEBHOOK_DELAY_SECONDS:-2}
     ports:
       - "8002:8002"
     depends_on:

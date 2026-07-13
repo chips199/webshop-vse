@@ -184,13 +184,29 @@ Anbieter:
 
 - `StripeAdapter`
 - `PayPalAdapter`
+- `AsyncWebhookStubAdapter` fuer asynchrone Zahlungsbestaetigungen
 
 Der aktive Anbieter wird per Konfiguration gesetzt, zum Beispiel
-`PAYMENT_PROVIDER=stripe` oder `PAYMENT_PROVIDER=paypal`.
+`PAYMENT_PROVIDER=stripe`, `PAYMENT_PROVIDER=paypal` oder
+`PAYMENT_PROVIDER=async-stub`.
 
 Adapter registrieren sich automatisch ueber die Basisklasse `PaymentAdapter`.
 Ein weiterer Anbieter wird als neue Adapterklasse mit eigenem `provider_name`
 hinzugefuegt; die Fassade selbst muss dafuer nicht geaendert werden.
+
+### Asynchroner Payment-Webhook-Stub
+
+Der Anbieter `async-stub` simuliert einen asynchronen Zahlungsanbieter:
+`charge()` liefert sofort `PaymentStatus.PENDING` zurueck. Der Billing-Service
+publiziert in diesem Moment noch kein Saga-Event. Nach der konfigurierbaren
+Verzoegerung `ASYNC_PAYMENT_WEBHOOK_DELAY_SECONDS` sendet der Stub einen
+Webhook an `POST /webhooks/payment-stub`. Dieser Webhook wird vom Billing-Service
+in das bestehende RabbitMQ-Event `billing.payment.succeeded` oder
+`billing.payment.failed` uebersetzt. Dadurch kann der Shop-Service den
+Saga-Ablauf unveraendert ueber die bestehenden Payment-Events fortsetzen.
+
+Fuer Tests kann das finale Ergebnis im Payment-Payload ueber
+`webhookStatus=SUCCEEDED` oder `webhookStatus=FAILED` gesteuert werden.
 
 ### API- und Fehlerkonventionen
 

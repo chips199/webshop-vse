@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     paypal_client_id: str | None = None
     paypal_client_secret: str | None = None
     paypal_base_url: str = "https://api-m.sandbox.paypal.com"
+    async_payment_webhook_url: str = "http://localhost:8002/webhooks/payment-stub"
+    async_payment_webhook_delay_seconds: float = 2.0
 
 
 settings = Settings()

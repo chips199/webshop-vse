@@ -1,11 +1,15 @@
 from decimal import Decimal
 import json
+import logging
+import threading
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from ..config import settings
 from .models import PaymentResult, PaymentStatus
+
+logger = logging.getLogger(__name__)
 
 
 class PaymentAdapter:
@@ -408,6 +412,76 @@ class PayPalAdapter(PaymentAdapter):
         except (HTTPError, URLError) as exc:
             raise RuntimeError(f"PayPal sandbox auth failed: {exc}") from exc
         return body["access_token"]
+
+
+class AsyncWebhookStubAdapter(PaymentAdapter):
+    provider_name = "async-stub"
+
+    def charge(
+        self,
+        order_id: str,
+        amount: Decimal,
+        currency: str,
+        payment_method: str | None = None,
+        payment_metadata: dict | None = None,
+    ) -> PaymentResult:
+        payment_metadata = payment_metadata or {}
+        transaction_id = f"async-stub-{order_id}"
+        webhook_status = str(payment_metadata.get("webhookStatus", "SUCCEEDED")).upper()
+        if webhook_status not in {"SUCCEEDED", "FAILED"}:
+            webhook_status = "SUCCEEDED"
+        webhook_payload = {
+            "orderId": order_id,
+            "transactionId": transaction_id,
+            "provider": self.provider_name,
+            "amount": f"{amount:.2f}",
+            "currency": currency,
+            "status": webhook_status,
+            "correlationId": payment_metadata.get("correlationId"),
+            "previousEventId": payment_metadata.get("previousEventId"),
+            "reasonCode": payment_metadata.get("webhookReasonCode") or "PAYMENT_DECLINED",
+            "message": payment_metadata.get("webhookMessage") or "Async payment stub completed.",
+        }
+        self._schedule_webhook(webhook_payload)
+        return PaymentResult(
+            transaction_id=transaction_id,
+            provider=self.provider_name,
+            status=PaymentStatus.PENDING,
+            reason="Webhook confirmation pending",
+        )
+
+    def refund(self, transaction_id: str, amount: Decimal) -> PaymentResult:
+        return PaymentResult(
+            transaction_id=transaction_id,
+            provider=self.provider_name,
+            status=PaymentStatus.REFUNDED,
+        )
+
+    def get_status(self, transaction_id: str) -> PaymentResult:
+        return PaymentResult(
+            transaction_id=transaction_id,
+            provider=self.provider_name,
+            status=PaymentStatus.PENDING,
+        )
+
+    def _schedule_webhook(self, payload: dict) -> None:
+        delay = max(settings.async_payment_webhook_delay_seconds, 0.0)
+        timer = threading.Timer(delay, self._send_webhook, args=(payload,))
+        timer.daemon = True
+        timer.start()
+
+    def _send_webhook(self, payload: dict) -> None:
+        request = Request(
+            settings.async_payment_webhook_url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=10):
+                return
+        except (HTTPError, URLError) as exc:
+            logger.warning("Async payment stub webhook failed: %s", exc)
 
 
 def _minor_units(amount: Decimal) -> int:

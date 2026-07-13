@@ -322,6 +322,9 @@ class PaymentSelection(BaseModel):
     paypalCaptureId: str | None = None
     approveUrl: str | None = None
     status: str | None = None
+    webhookStatus: str | None = None
+    webhookReasonCode: str | None = None
+    webhookMessage: str | None = None
 
 
 class CreateOrderRequest(BaseModel):
