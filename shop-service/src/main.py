@@ -13,6 +13,7 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from psycopg.errors import UniqueViolation
 
 from .config import settings
 from .database import calculate_total, create_admin_session, delete_admin_session
@@ -21,6 +22,7 @@ from .database import enrich_items_from_products, get_admin_session, get_product
 from .database import complete_order_if_ready
 from .database import list_admin_orders, verify_admin_credentials
 from .database import get_order as get_order_record
+from .database import get_order_by_idempotency_key
 from .database import init_database, update_order_status
 from .database import update_invoice_created, update_payment_succeeded, update_warehouse_commit
 from .logging_config import configure_logging
@@ -423,6 +425,18 @@ async def list_products() -> list[ProductResponse]:
 @app.post("/orders", response_model=OrderResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_order(request: Request, order: CreateOrderRequest) -> OrderResponse:
     correlation_id = request.state.correlation_id
+    idempotency_key = _idempotency_key_from_request(request)
+    request_hash = _request_hash(order)
+    if idempotency_key:
+        existing_order = get_order_by_idempotency_key(idempotency_key)
+        if existing_order:
+            if existing_order.get("requestHash") != request_hash:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Idempotency-Key was already used for a different request body.",
+                )
+            return _initial_order_response(existing_order)
+
     order_id = str(uuid4())
     customer_id = order.customerId or str(uuid4())
     raw_items = [item.model_dump() for item in order.items]
@@ -433,18 +447,31 @@ async def create_order(request: Request, order: CreateOrderRequest) -> OrderResp
     amount = calculate_total(enriched_items)
     currency = order.payment.currency
     payment = order.payment.model_dump()
-    create_order_record(
-        order_id,
-        correlation_id,
-        customer_id,
-        order.customer.model_dump(),
-        order.shippingAddress.model_dump(),
-        order.billingAddress.model_dump() if order.billingAddress else None,
-        enriched_items,
-        payment,
-        str(amount),
-        currency,
-    )
+    try:
+        create_order_record(
+            order_id,
+            correlation_id,
+            customer_id,
+            order.customer.model_dump(),
+            order.shippingAddress.model_dump(),
+            order.billingAddress.model_dump() if order.billingAddress else None,
+            enriched_items,
+            payment,
+            str(amount),
+            currency,
+            idempotency_key,
+            request_hash,
+        )
+    except UniqueViolation as exc:
+        if not idempotency_key:
+            raise
+        existing_order = get_order_by_idempotency_key(idempotency_key)
+        if existing_order and existing_order.get("requestHash") == request_hash:
+            return _initial_order_response(existing_order)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Idempotency-Key was already used for a different request body.",
+        ) from exc
     order_created = build_message(
         "order.created",
         correlation_id,
@@ -499,10 +526,41 @@ async def get_order(orderId: str) -> OrderResponse:
     order = get_order_record(orderId)
     if not order:
         raise HTTPException(status_code=404, detail=f"Order {orderId} not found")
+    return _order_response(order)
+
+
+def _idempotency_key_from_request(request: Request) -> str | None:
+    value = request.headers.get("Idempotency-Key")
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        raise HTTPException(status_code=400, detail="Idempotency-Key header must not be empty")
+    if len(stripped) > 128:
+        raise HTTPException(status_code=400, detail="Idempotency-Key header must not exceed 128 characters")
+    return stripped
+
+
+def _request_hash(order: CreateOrderRequest) -> str:
+    canonical = json.dumps(order.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _order_response(order: dict) -> OrderResponse:
     return OrderResponse(
         orderId=str(order["orderId"]),
         correlationId=str(order["correlationId"]),
         status=order["status"],
+        amount=str(order["amount"]),
+        currency=order["currency"],
+    )
+
+
+def _initial_order_response(order: dict) -> OrderResponse:
+    return OrderResponse(
+        orderId=str(order["orderId"]),
+        correlationId=str(order["correlationId"]),
+        status="PENDING",
         amount=str(order["amount"]),
         currency=order["currency"],
     )

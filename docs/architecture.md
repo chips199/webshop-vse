@@ -198,6 +198,15 @@ Alle Services liefern technische Fehler als RFC-7807-kompatible
 `application/problem+json`-Antworten. Die Antwort enthaelt `type`, `title`,
 `status`, `detail`, `instance` und die aktuelle `correlationId`.
 
+### Idempotenz fuer POST /orders
+
+Der Shop-Service unterstuetzt den Header `Idempotency-Key` fuer `POST /orders`.
+Der erste Request speichert Key und Hash des kanonischen Request-Bodys in der
+Tabelle `shop_orders`. Wiederholt ein Client denselben Request mit identischem
+Key, liefert der Shop-Service dieselbe `OrderResponse` zurueck und publiziert
+keine weiteren RabbitMQ-Commands. Wird derselbe Key mit einem anderen Body
+verwendet, antwortet der Service mit `409 Conflict`.
+
 ### Logging
 
 Alle Services schreiben strukturierte JSON-Logs auf die Konsole und in taeglich

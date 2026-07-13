@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS shop_orders (
     invoice_id UUID NULL,
     invoice_status TEXT NULL,
     warehouse_commit_status TEXT NULL,
+    idempotency_key TEXT NULL,
+    request_hash TEXT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -145,6 +147,15 @@ def init_database() -> None:
             cursor.execute("ALTER TABLE shop_orders ADD COLUMN IF NOT EXISTS customer JSONB NULL;")
             cursor.execute("ALTER TABLE shop_orders ADD COLUMN IF NOT EXISTS shipping_address JSONB NULL;")
             cursor.execute("ALTER TABLE shop_orders ADD COLUMN IF NOT EXISTS billing_address JSONB NULL;")
+            cursor.execute("ALTER TABLE shop_orders ADD COLUMN IF NOT EXISTS idempotency_key TEXT NULL;")
+            cursor.execute("ALTER TABLE shop_orders ADD COLUMN IF NOT EXISTS request_hash TEXT NULL;")
+            cursor.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_shop_orders_idempotency_key
+                    ON shop_orders (idempotency_key)
+                    WHERE idempotency_key IS NOT NULL;
+                """
+            )
             _seed_products(cursor)
             _seed_admin_user(cursor)
 
@@ -160,6 +171,8 @@ def create_order(
     payment: dict[str, Any],
     amount: str,
     currency: str,
+    idempotency_key: str | None = None,
+    request_hash: str | None = None,
 ) -> None:
     query = """
     INSERT INTO shop_orders (
@@ -173,9 +186,11 @@ def create_order(
         items,
         payment,
         amount,
-        currency
+        currency,
+        idempotency_key,
+        request_hash
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
     """
     with psycopg.connect(settings.database_url) as connection:
         with connection.cursor() as cursor:
@@ -193,6 +208,8 @@ def create_order(
                     Jsonb(payment),
                     amount,
                     currency,
+                    idempotency_key,
+                    request_hash,
                 ),
             )
 
@@ -266,6 +283,8 @@ def get_order(order_id: str) -> dict[str, Any] | None:
         status,
         amount,
         currency,
+        idempotency_key AS "idempotencyKey",
+        request_hash AS "requestHash",
         customer,
         shipping_address AS "shippingAddress",
         billing_address AS "billingAddress",
@@ -279,6 +298,25 @@ def get_order(order_id: str) -> dict[str, Any] | None:
     with psycopg.connect(settings.database_url, row_factory=dict_row) as connection:
         with connection.cursor() as cursor:
             cursor.execute(query, (order_id,))
+            return cursor.fetchone()
+
+
+def get_order_by_idempotency_key(idempotency_key: str) -> dict[str, Any] | None:
+    query = """
+    SELECT
+        id AS "orderId",
+        correlation_id AS "correlationId",
+        status,
+        amount,
+        currency,
+        idempotency_key AS "idempotencyKey",
+        request_hash AS "requestHash"
+    FROM shop_orders
+    WHERE idempotency_key = %s;
+    """
+    with psycopg.connect(settings.database_url, row_factory=dict_row) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(query, (idempotency_key,))
             return cursor.fetchone()
 
 

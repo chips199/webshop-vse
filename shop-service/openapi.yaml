@@ -33,6 +33,7 @@ paths:
       summary: Create an order
       parameters:
         - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -48,6 +49,8 @@ paths:
                 $ref: "#/components/schemas/OrderResponse"
         "422":
           description: Validation or business rule failure
+        "409":
+          description: Idempotency-Key was already used for a different request body
   /orders/{orderId}:
     get:
       summary: Get order status
@@ -158,6 +161,14 @@ components:
       schema:
         type: string
         format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 128
+      description: Prevents duplicate order execution for repeated identical POST /orders requests.
   schemas:
     HealthResponse:
       type: object
