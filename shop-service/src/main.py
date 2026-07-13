@@ -18,12 +18,14 @@ from psycopg.errors import UniqueViolation
 from .config import settings
 from .database import calculate_total, create_admin_session, delete_admin_session
 from .database import create_order as create_order_record
+from .database import create_product as create_product_record
 from .database import enrich_items_from_products, get_admin_session, get_products
 from .database import complete_order_if_ready
 from .database import list_admin_orders, verify_admin_credentials
 from .database import get_order as get_order_record
 from .database import get_order_by_idempotency_key
 from .database import init_database, update_order_status
+from .database import update_product as update_product_record
 from .database import update_invoice_created, update_payment_succeeded, update_warehouse_commit
 from .logging_config import configure_logging
 from .messaging import build_message, consume_messages, publish_message
@@ -351,7 +353,31 @@ class ProductResponse(BaseModel):
     quantityOnHand: int | None = None
     reservedQuantity: int | None = None
     availableQuantity: int | None = None
+    location: str | None = None
     stockStatus: str = "UNKNOWN"
+
+
+class ProductUpdateRequest(BaseModel):
+    name: str = Field(min_length=1)
+    year: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    price: str = Field(min_length=1)
+    currency: str = "EUR"
+    imageUrl: str = Field(min_length=1)
+    imageAlt: str = Field(min_length=1)
+    imageSource: str | None = ""
+    imageLicense: str | None = ""
+    imageCredit: str | None = ""
+
+
+class ProductCreateRequest(ProductUpdateRequest):
+    quantityOnHand: int = Field(default=0, ge=0)
+    location: str | None = "RETRO-A1"
+
+
+class StockUpdateRequest(BaseModel):
+    quantityOnHand: int = Field(ge=0)
+    location: str | None = None
 
 
 class OrderResponse(BaseModel):
@@ -627,6 +653,60 @@ async def admin_order_audit(orderId: str, _: str = Depends(require_admin)) -> Ad
     )
 
 
+@app.get("/admin/products", response_model=list[ProductResponse])
+async def admin_products(_: str = Depends(require_admin)) -> list[ProductResponse]:
+    stock_by_product_id = fetch_warehouse_stock()
+    return [
+        ProductResponse(**_serialize_product(product, stock_by_product_id.get(str(product["id"]))))
+        for product in get_products()
+    ]
+
+
+@app.post("/admin/products", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
+async def admin_create_product(
+    product: ProductCreateRequest,
+    _: str = Depends(require_admin),
+) -> ProductResponse:
+    product_id = str(uuid4())
+    product_payload = product.model_dump(exclude={"quantityOnHand", "location"})
+    created = create_product_record(product_id, product_payload)
+    created_stock = create_warehouse_stock(
+        {
+            "productId": product_id,
+            "quantityOnHand": product.quantityOnHand,
+            "location": product.location or "RETRO-A1",
+        }
+    )
+    return ProductResponse(**_serialize_product(created, created_stock))
+
+
+@app.put("/admin/products/{productId}", response_model=ProductResponse)
+async def admin_update_product(
+    productId: str,
+    product: ProductUpdateRequest,
+    _: str = Depends(require_admin),
+) -> ProductResponse:
+    updated = update_product_record(productId, product.model_dump())
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"Product {productId} not found")
+    stock_by_product_id = fetch_warehouse_stock()
+    return ProductResponse(**_serialize_product(updated, stock_by_product_id.get(str(updated["id"]))))
+
+
+@app.patch("/admin/products/{productId}/stock", response_model=ProductResponse)
+async def admin_update_product_stock(
+    productId: str,
+    stock: StockUpdateRequest,
+    _: str = Depends(require_admin),
+) -> ProductResponse:
+    update_warehouse_stock(productId, stock.model_dump())
+    product = next((entry for entry in get_products() if str(entry["id"]) == productId), None)
+    if product is None:
+        raise HTTPException(status_code=404, detail=f"Product {productId} not found")
+    stock_by_product_id = fetch_warehouse_stock()
+    return ProductResponse(**_serialize_product(product, stock_by_product_id.get(productId)))
+
+
 def _serialize_product(product: dict, stock: dict | None = None) -> dict:
     serialized = {
         **product,
@@ -641,6 +721,7 @@ def _serialize_product(product: dict, stock: dict | None = None) -> dict:
         "quantityOnHand": int(stock["quantityOnHand"]),
         "reservedQuantity": int(stock["reservedQuantity"]),
         "availableQuantity": available,
+        "location": stock.get("location"),
         "stockStatus": "OUT_OF_STOCK" if available <= 0 else "AVAILABLE",
     }
 
@@ -686,3 +767,39 @@ def fetch_warehouse_stock() -> dict[str, dict]:
         logger.warning("Warehouse stock unavailable", extra={"context": {"error": str(exc)}})
         return {}
     return {entry["productId"]: entry for entry in stock_entries}
+
+
+def update_warehouse_stock(product_id: str, stock: dict) -> dict:
+    url = f"{settings.warehouse_service_url.rstrip('/')}/stock/{product_id}"
+    request = UrlRequest(
+        url,
+        data=json.dumps(stock).encode("utf-8"),
+        headers={"Content-Type": "application/json", "X-Correlation-Id": str(uuid4())},
+        method="PATCH",
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8") if exc.fp else str(exc)
+        raise HTTPException(status_code=exc.code, detail=f"Warehouse stock update failed: {detail}") from exc
+    except (URLError, TimeoutError) as exc:
+        raise HTTPException(status_code=502, detail=f"Warehouse service unavailable: {exc}") from exc
+
+
+def create_warehouse_stock(stock: dict) -> dict:
+    url = f"{settings.warehouse_service_url.rstrip('/')}/stock"
+    request = UrlRequest(
+        url,
+        data=json.dumps(stock).encode("utf-8"),
+        headers={"Content-Type": "application/json", "X-Correlation-Id": str(uuid4())},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8") if exc.fp else str(exc)
+        raise HTTPException(status_code=exc.code, detail=f"Warehouse stock creation failed: {detail}") from exc
+    except (URLError, TimeoutError) as exc:
+        raise HTTPException(status_code=502, detail=f"Warehouse service unavailable: {exc}") from exc

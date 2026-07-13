@@ -68,6 +68,64 @@ def list_stock() -> list[dict[str, Any]]:
             return cursor.fetchall()
 
 
+def create_stock(product_id: str, quantity_on_hand: int, location: str | None = None) -> dict[str, Any]:
+    query = """
+    INSERT INTO warehouse_stock (product_id, quantity_on_hand, reserved_quantity, location)
+    VALUES (%s, %s, 0, %s)
+    ON CONFLICT (product_id) DO UPDATE SET
+        quantity_on_hand = EXCLUDED.quantity_on_hand,
+        location = EXCLUDED.location,
+        updated_at = now()
+    RETURNING
+        product_id AS "productId",
+        quantity_on_hand AS "quantityOnHand",
+        reserved_quantity AS "reservedQuantity",
+        quantity_on_hand - reserved_quantity AS "availableQuantity",
+        location,
+        updated_at AS "updatedAt";
+    """
+    with psycopg.connect(settings.database_url, row_factory=dict_row) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(query, (product_id, quantity_on_hand, location or "RETRO-A1"))
+            return cursor.fetchone()
+
+
+def update_stock(product_id: str, quantity_on_hand: int, location: str | None = None) -> dict[str, Any] | None:
+    with psycopg.connect(settings.database_url, row_factory=dict_row) as connection:
+        with connection.transaction():
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT reserved_quantity, location
+                    FROM warehouse_stock
+                    WHERE product_id = %s
+                    FOR UPDATE;
+                    """,
+                    (product_id,),
+                )
+                current = cursor.fetchone()
+                if current is None:
+                    return None
+                if quantity_on_hand < int(current["reserved_quantity"]):
+                    raise ValueError("quantityOnHand must not be lower than reservedQuantity")
+                cursor.execute(
+                    """
+                    UPDATE warehouse_stock
+                    SET quantity_on_hand = %s, location = %s, updated_at = now()
+                    WHERE product_id = %s
+                    RETURNING
+                        product_id AS "productId",
+                        quantity_on_hand AS "quantityOnHand",
+                        reserved_quantity AS "reservedQuantity",
+                        quantity_on_hand - reserved_quantity AS "availableQuantity",
+                        location,
+                        updated_at AS "updatedAt";
+                    """,
+                    (quantity_on_hand, location or current["location"], product_id),
+                )
+                return cursor.fetchone()
+
+
 def reserve_stock(order_id: str, items: list[dict[str, Any]]) -> tuple[bool, str | None]:
     with psycopg.connect(settings.database_url, row_factory=dict_row) as connection:
         with connection.transaction():

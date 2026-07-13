@@ -3,11 +3,11 @@ import logging
 import threading
 from uuid import uuid4
 
-from fastapi import FastAPI, Request, Response
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Request, Response
+from pydantic import BaseModel, Field
 
 from .config import settings
-from .database import cancel_reservation, commit_reservation, init_database, list_stock, reserve_stock
+from .database import cancel_reservation, commit_reservation, create_stock, init_database, list_stock, reserve_stock, update_stock
 from .logging_config import configure_logging
 from .messaging import build_message, consume_messages, publish_message
 from .problem_details import register_problem_handlers
@@ -172,6 +172,15 @@ class StockResponse(BaseModel):
     location: str
 
 
+class StockUpdateRequest(BaseModel):
+    quantityOnHand: int = Field(ge=0)
+    location: str | None = None
+
+
+class StockCreateRequest(StockUpdateRequest):
+    productId: str
+
+
 @app.middleware("http")
 async def correlation_id_middleware(request: Request, call_next):
     correlation_id = request.headers.get("X-Correlation-Id") or str(uuid4())
@@ -198,3 +207,32 @@ async def stock() -> list[StockResponse]:
         )
         for entry in list_stock()
     ]
+
+
+@app.post("/stock", response_model=StockResponse)
+async def post_stock(request: StockCreateRequest) -> StockResponse:
+    created = create_stock(request.productId, request.quantityOnHand, request.location)
+    return StockResponse(
+        productId=str(created["productId"]),
+        quantityOnHand=created["quantityOnHand"],
+        reservedQuantity=created["reservedQuantity"],
+        availableQuantity=created["availableQuantity"],
+        location=created["location"],
+    )
+
+
+@app.patch("/stock/{productId}", response_model=StockResponse)
+async def patch_stock(productId: str, request: StockUpdateRequest) -> StockResponse:
+    try:
+        updated = update_stock(productId, request.quantityOnHand, request.location)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"Stock entry for product {productId} not found")
+    return StockResponse(
+        productId=str(updated["productId"]),
+        quantityOnHand=updated["quantityOnHand"],
+        reservedQuantity=updated["reservedQuantity"],
+        availableQuantity=updated["availableQuantity"],
+        location=updated["location"],
+    )

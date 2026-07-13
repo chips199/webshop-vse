@@ -147,6 +147,101 @@ paths:
           description: Admin login required
         "404":
           description: Order not found
+  /admin/products:
+    get:
+      summary: List products with warehouse stock for admin editing
+      security:
+        - AdminCookie: []
+      responses:
+        "200":
+          description: Editable product catalog including current warehouse stock
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Product"
+        "401":
+          description: Admin login required
+    post:
+      summary: Create a new product with initial warehouse stock
+      security:
+        - AdminCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductCreateRequest"
+      responses:
+        "201":
+          description: Product created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        "401":
+          description: Admin login required
+  /admin/products/{productId}:
+    put:
+      summary: Update product master data
+      security:
+        - AdminCookie: []
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductUpdateRequest"
+      responses:
+        "200":
+          description: Updated product
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        "401":
+          description: Admin login required
+        "404":
+          description: Product not found
+  /admin/products/{productId}/stock:
+    patch:
+      summary: Update warehouse stock for a product through the shop admin API
+      security:
+        - AdminCookie: []
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StockUpdateRequest"
+      responses:
+        "200":
+          description: Product with updated warehouse stock
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        "401":
+          description: Admin login required
+        "404":
+          description: Product or stock entry not found
+        "409":
+          description: Quantity cannot be lower than reserved stock
 components:
   securitySchemes:
     AdminCookie:
@@ -221,9 +316,63 @@ components:
           type: integer
           nullable: true
           minimum: 0
+        location:
+          type: string
+          nullable: true
         stockStatus:
           type: string
           enum: [AVAILABLE, OUT_OF_STOCK, UNKNOWN]
+    ProductUpdateRequest:
+      type: object
+      required: [name, year, description, price, currency, imageUrl, imageAlt]
+      properties:
+        name:
+          type: string
+        year:
+          type: string
+        description:
+          type: string
+        price:
+          type: string
+        currency:
+          type: string
+          example: EUR
+        imageUrl:
+          type: string
+          format: uri
+        imageAlt:
+          type: string
+        imageSource:
+          type: string
+          nullable: true
+        imageLicense:
+          type: string
+          nullable: true
+        imageCredit:
+          type: string
+          nullable: true
+    ProductCreateRequest:
+      allOf:
+        - $ref: "#/components/schemas/ProductUpdateRequest"
+        - type: object
+          required: [quantityOnHand]
+          properties:
+            quantityOnHand:
+              type: integer
+              minimum: 0
+            location:
+              type: string
+              nullable: true
+    StockUpdateRequest:
+      type: object
+      required: [quantityOnHand]
+      properties:
+        quantityOnHand:
+          type: integer
+          minimum: 0
+        location:
+          type: string
+          nullable: true
     CreateOrderRequest:
       type: object
       required: [customer, shippingAddress, items, payment]

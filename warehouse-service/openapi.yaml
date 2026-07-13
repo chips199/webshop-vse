@@ -30,6 +30,50 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/StockResponse"
+    post:
+      summary: Create warehouse stock for a product
+      operationId: createStock
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StockCreateRequest"
+      responses:
+        "200":
+          description: Created stock entry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockResponse"
+  /stock/{productId}:
+    patch:
+      summary: Update warehouse stock for one product
+      operationId: updateStock
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StockUpdateRequest"
+      responses:
+        "200":
+          description: Updated stock entry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockResponse"
+        "404":
+          description: Stock entry not found
+        "409":
+          description: Quantity cannot be lower than reserved stock
 components:
   schemas:
     HealthResponse:
@@ -60,3 +104,22 @@ components:
           minimum: 0
         location:
           type: string
+    StockUpdateRequest:
+      type: object
+      required: [quantityOnHand]
+      properties:
+        quantityOnHand:
+          type: integer
+          minimum: 0
+        location:
+          type: string
+          nullable: true
+    StockCreateRequest:
+      allOf:
+        - $ref: "#/components/schemas/StockUpdateRequest"
+        - type: object
+          required: [productId]
+          properties:
+            productId:
+              type: string
+              format: uuid

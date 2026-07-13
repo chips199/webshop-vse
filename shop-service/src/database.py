@@ -366,6 +366,108 @@ def get_products() -> list[dict[str, Any]]:
             return cursor.fetchall()
 
 
+def create_product(product_id: str, product: dict[str, Any]) -> dict[str, Any]:
+    query = """
+    INSERT INTO products (
+        id,
+        name,
+        year,
+        description,
+        price,
+        currency,
+        image_url,
+        image_alt,
+        image_source,
+        image_license,
+        image_credit,
+        active
+    )
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE)
+    RETURNING
+        id,
+        name,
+        year,
+        description,
+        price,
+        currency,
+        image_url AS "imageUrl",
+        image_alt AS "imageAlt",
+        image_source AS "imageSource",
+        image_license AS "imageLicense",
+        image_credit AS "imageCredit";
+    """
+    with psycopg.connect(settings.database_url, row_factory=dict_row) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                query,
+                (
+                    product_id,
+                    product["name"],
+                    product["year"],
+                    product["description"],
+                    product["price"],
+                    product["currency"],
+                    product["imageUrl"],
+                    product["imageAlt"],
+                    product.get("imageSource") or "",
+                    product.get("imageLicense") or "",
+                    product.get("imageCredit") or "",
+                ),
+            )
+            return cursor.fetchone()
+
+
+def update_product(product_id: str, product: dict[str, Any]) -> dict[str, Any] | None:
+    query = """
+    UPDATE products
+    SET
+        name = %s,
+        year = %s,
+        description = %s,
+        price = %s,
+        currency = %s,
+        image_url = %s,
+        image_alt = %s,
+        image_source = %s,
+        image_license = %s,
+        image_credit = %s,
+        updated_at = now()
+    WHERE id = %s
+      AND active = TRUE
+    RETURNING
+        id,
+        name,
+        year,
+        description,
+        price,
+        currency,
+        image_url AS "imageUrl",
+        image_alt AS "imageAlt",
+        image_source AS "imageSource",
+        image_license AS "imageLicense",
+        image_credit AS "imageCredit";
+    """
+    with psycopg.connect(settings.database_url, row_factory=dict_row) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                query,
+                (
+                    product["name"],
+                    product["year"],
+                    product["description"],
+                    product["price"],
+                    product["currency"],
+                    product["imageUrl"],
+                    product["imageAlt"],
+                    product.get("imageSource") or "",
+                    product.get("imageLicense") or "",
+                    product.get("imageCredit") or "",
+                    product_id,
+                ),
+            )
+            return cursor.fetchone()
+
+
 def enrich_items_from_products(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     product_ids = [item["productId"] for item in items]
     products = _get_products_by_ids(product_ids)
@@ -522,19 +624,7 @@ def _seed_products(cursor) -> None:
         image_credit
     )
     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    ON CONFLICT (id) DO UPDATE SET
-        name = EXCLUDED.name,
-        year = EXCLUDED.year,
-        description = EXCLUDED.description,
-        price = EXCLUDED.price,
-        currency = EXCLUDED.currency,
-        image_url = EXCLUDED.image_url,
-        image_alt = EXCLUDED.image_alt,
-        image_source = EXCLUDED.image_source,
-        image_license = EXCLUDED.image_license,
-        image_credit = EXCLUDED.image_credit,
-        active = TRUE,
-        updated_at = now();
+    ON CONFLICT (id) DO NOTHING;
     """
     for product in PRODUCT_SEED:
         cursor.execute(

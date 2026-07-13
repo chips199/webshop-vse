@@ -643,9 +643,6 @@ function ShopPage({ addToCart, cartItems, changeQuantity, error, products, total
                 {stockLabel(product)}
               </p>
               <p>{product.description}</p>
-              <small className="credit">
-                Bild: {product.imageCredit}, {product.imageLicense}
-              </small>
               <div className="product-actions">
                 <strong>{formatPrice(product.price, product.currency)}</strong>
                 <div className="stepper">
@@ -719,14 +716,6 @@ function ProductDetailPage({ addToCart, cartItems, changeQuantity, product }) {
             <div>
               <dt>Bestand</dt>
               <dd>{stockLabel(product)}</dd>
-            </div>
-            <div>
-              <dt>Bildquelle</dt>
-              <dd>{product.imageCredit}</dd>
-            </div>
-            <div>
-              <dt>Lizenzhinweis</dt>
-              <dd>{product.imageLicense}</dd>
             </div>
           </dl>
           <div className="detail-actions">
@@ -1073,16 +1062,44 @@ function TextInput({ label, onChange, required = true, type = "text", value }) {
   );
 }
 
+function TextArea({ label, onChange, value }) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <textarea required value={value || ""} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+const emptyProductDraft = {
+  name: "",
+  year: "",
+  description: "",
+  price: "0.00",
+  currency: "EUR",
+  imageUrl: "",
+  imageAlt: "",
+  imageSource: "",
+  imageLicense: "",
+  imageCredit: "",
+  quantityOnHand: 0,
+  location: "RETRO-A1",
+};
+
 function AdminPage() {
   const [session, setSession] = useState({ authenticated: false });
   const [credentials, setCredentials] = useState({ username: "admin", password: "" });
   const [orders, setOrders] = useState([]);
+  const [products, setProducts] = useState([]);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [timeline, setTimeline] = useState([]);
   const [error, setError] = useState("");
+  const [productError, setProductError] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [loading, setLoading] = useState(false);
+  const [savingProductId, setSavingProductId] = useState("");
+  const [activeAdminView, setActiveAdminView] = useState("orders");
 
   useEffect(() => {
     fetch(`${SHOP_API}/admin/session`, { credentials: "include" })
@@ -1094,6 +1111,7 @@ function AdminPage() {
   useEffect(() => {
     if (!session.authenticated) return;
     loadOrders();
+    loadAdminProducts();
   }, [session.authenticated]);
 
   const statusOptions = useMemo(() => ["all", ...Array.from(new Set(orders.map((entry) => entry.status))).sort()], [orders]);
@@ -1170,6 +1188,81 @@ function AdminPage() {
     }
   }
 
+  async function loadAdminProducts() {
+    const response = await fetch(`${SHOP_API}/admin/products`, { credentials: "include", cache: "no-store" });
+    if (!response.ok) {
+      setProductError("Artikel konnten nicht geladen werden.");
+      return;
+    }
+    setProducts(await response.json());
+  }
+
+  async function createProduct(productDraft) {
+    setSavingProductId("new");
+    setProductError("");
+    try {
+      const response = await fetch(`${SHOP_API}/admin/products`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(productDraft),
+      });
+      if (!response.ok) {
+        throw new Error(`Artikel konnte nicht angelegt werden: HTTP ${response.status}`);
+      }
+      await loadAdminProducts();
+      setActiveAdminView("products");
+      return true;
+    } catch (caught) {
+      setProductError(caught.message);
+      return false;
+    } finally {
+      setSavingProductId("");
+    }
+  }
+
+  async function saveProduct(productId, productDraft) {
+    setSavingProductId(productId);
+    setProductError("");
+    try {
+      const productResponse = await fetch(`${SHOP_API}/admin/products/${productId}`, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(productDraft),
+      });
+      if (!productResponse.ok) {
+        throw new Error(`Artikel konnte nicht gespeichert werden: HTTP ${productResponse.status}`);
+      }
+      await loadAdminProducts();
+    } catch (caught) {
+      setProductError(caught.message);
+    } finally {
+      setSavingProductId("");
+    }
+  }
+
+  async function saveStock(productId, stockDraft) {
+    setSavingProductId(productId);
+    setProductError("");
+    try {
+      const stockResponse = await fetch(`${SHOP_API}/admin/products/${productId}/stock`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(stockDraft),
+      });
+      if (!stockResponse.ok) {
+        throw new Error(`Warehouse-Menge konnte nicht gespeichert werden: HTTP ${stockResponse.status}`);
+      }
+      await loadAdminProducts();
+    } catch (caught) {
+      setProductError(caught.message);
+    } finally {
+      setSavingProductId("");
+    }
+  }
+
   async function selectOrder(order) {
     setSelectedOrder(order);
     setTimeline([]);
@@ -1228,42 +1321,82 @@ function AdminPage() {
         <Metric icon={<CreditCard size={18} />} label="Umsatz" value={formatPrice(dashboardStats.revenue)} />
       </div>
 
-      <div className="admin-toolbar">
-        <label className="admin-search">
-          <Search size={16} />
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Order, Kunde, Transaktion suchen" />
-        </label>
-        <label className="admin-filter">
-          <span>Status</span>
-          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
-            {statusOptions.map((option) => (
-              <option key={option} value={option}>
-                {option === "all" ? "Alle" : option}
-              </option>
-            ))}
-          </select>
-        </label>
+      <div className="admin-tabs">
+        <button className={activeAdminView === "orders" ? "tab-button active" : "tab-button"} onClick={() => setActiveAdminView("orders")}>
+          <ClipboardList size={16} />
+          Bestellungen
+        </button>
+        <button className={activeAdminView === "products" ? "tab-button active" : "tab-button"} onClick={() => setActiveAdminView("products")}>
+          <Cpu size={16} />
+          Artikel
+        </button>
+        <button className={activeAdminView === "warehouse" ? "tab-button active" : "tab-button"} onClick={() => setActiveAdminView("warehouse")}>
+          <Boxes size={16} />
+          Warehouse
+        </button>
       </div>
 
-      <div className="admin-grid">
-        <aside className="order-list">
-          {filteredOrders.map((entry) => (
-            <button
-              className={selectedOrder?.orderId === entry.orderId ? "order-row active" : "order-row"}
-              key={entry.orderId}
-              onClick={() => selectOrder(entry)}
-            >
-              <span className={`status-pill ${statusTone(entry.status)}`}>{entry.status}</span>
-              <strong>{entry.customer?.firstName} {entry.customer?.lastName}</strong>
-              <small>{formatDateTime(entry.createdAt)} // {formatPrice(entry.amount, entry.currency)}</small>
-              <small>{shortId(entry.orderId)}</small>
-            </button>
-          ))}
-          {filteredOrders.length === 0 && <p className="muted">Keine Bestellung passt zum Filter.</p>}
-        </aside>
+      {activeAdminView === "products" && (
+        <ProductAdminPanel
+          error={productError}
+          onCreate={createProduct}
+          onReload={loadAdminProducts}
+          products={products}
+          savingProductId={savingProductId}
+          onSave={saveProduct}
+        />
+      )}
 
-        <OrderAdminDetail order={selectedOrder} timeline={timeline} />
-      </div>
+      {activeAdminView === "warehouse" && (
+        <WarehouseAdminPanel
+          error={productError}
+          onReload={loadAdminProducts}
+          onSave={saveStock}
+          products={products}
+          savingProductId={savingProductId}
+        />
+      )}
+
+      {activeAdminView === "orders" && (
+        <>
+          <div className="admin-toolbar">
+            <label className="admin-search">
+              <Search size={16} />
+              <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Order, Kunde, Transaktion suchen" />
+            </label>
+            <label className="admin-filter">
+              <span>Status</span>
+              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+                {statusOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option === "all" ? "Alle" : option}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="admin-grid">
+            <aside className="order-list">
+              {filteredOrders.map((entry) => (
+                <button
+                  className={selectedOrder?.orderId === entry.orderId ? "order-row active" : "order-row"}
+                  key={entry.orderId}
+                  onClick={() => selectOrder(entry)}
+                >
+                  <span className={`status-pill ${statusTone(entry.status)}`}>{entry.status}</span>
+                  <strong>{entry.customer?.firstName} {entry.customer?.lastName}</strong>
+                  <small>{formatDateTime(entry.createdAt)} // {formatPrice(entry.amount, entry.currency)}</small>
+                  <small>{shortId(entry.orderId)}</small>
+                </button>
+              ))}
+              {filteredOrders.length === 0 && <p className="muted">Keine Bestellung passt zum Filter.</p>}
+            </aside>
+
+            <OrderAdminDetail order={selectedOrder} timeline={timeline} />
+          </div>
+        </>
+      )}
     </section>
   );
 }
@@ -1276,6 +1409,206 @@ function Metric({ icon, label, tone = "", value }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function ProductAdminPanel({ error, onCreate, onReload, onSave, products, savingProductId }) {
+  return (
+    <section className="product-admin-panel">
+      <div className="panel-title">
+        <Cpu size={18} />
+        <h2>Artikel</h2>
+      </div>
+      <ProductCreateForm onCreate={onCreate} saving={savingProductId === "new"} />
+      {error && <p className="error">{error}</p>}
+      <div className="product-admin-actions">
+        <button className="link-button" type="button" onClick={onReload}>
+          <RefreshCw size={16} />
+          Artikel neu laden
+        </button>
+      </div>
+      {products.length === 0 ? (
+        <p className="muted">Keine Artikel geladen.</p>
+      ) : (
+        <div className="product-admin-list">
+          {products.map((product) => (
+            <ProductAdminRow
+              key={product.id}
+              product={product}
+              saving={savingProductId === product.id}
+              onSave={onSave}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ProductCreateForm({ onCreate, saving }) {
+  const [draft, setDraft] = useState(emptyProductDraft);
+  return (
+    <form
+      className="product-create-form"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        const created = await onCreate({ ...draft, quantityOnHand: Number(draft.quantityOnHand) });
+        if (created) {
+          setDraft(emptyProductDraft);
+        }
+      }}
+    >
+      <div className="product-admin-heading">
+        <strong>Neuen Artikel anlegen</strong>
+      </div>
+      <div className="product-admin-grid">
+        <TextInput label="Name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} />
+        <TextInput label="Jahr" value={draft.year} onChange={(value) => setDraft({ ...draft, year: value })} />
+        <TextInput label="Preis" type="number" value={draft.price} onChange={(value) => setDraft({ ...draft, price: value })} />
+        <TextInput label="Waehrung" value={draft.currency} onChange={(value) => setDraft({ ...draft, currency: value })} />
+        <TextInput label="Bild-URL" value={draft.imageUrl} onChange={(value) => setDraft({ ...draft, imageUrl: value })} />
+        <TextInput label="Alt-Text" value={draft.imageAlt} onChange={(value) => setDraft({ ...draft, imageAlt: value })} />
+        <TextInput
+          label="Startbestand"
+          type="number"
+          value={draft.quantityOnHand}
+          onChange={(value) => setDraft({ ...draft, quantityOnHand: Number(value) })}
+        />
+        <TextInput label="Lagerort" value={draft.location} onChange={(value) => setDraft({ ...draft, location: value })} />
+      </div>
+      <TextArea label="Beschreibung" value={draft.description} onChange={(value) => setDraft({ ...draft, description: value })} />
+      <div className="product-admin-actions">
+        <button className="add-button" type="submit" disabled={saving}>
+          <Plus size={16} />
+          {saving ? "Legt an..." : "Artikel anlegen"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function ProductAdminRow({ onSave, product, saving }) {
+  const [draft, setDraft] = useState(() => productDraftFromProduct(product));
+
+  useEffect(() => {
+    setDraft(productDraftFromProduct(product));
+  }, [product]);
+
+  return (
+    <article className="product-admin-row">
+      <img src={product.imageUrl} alt={product.imageAlt} />
+      <div className="product-admin-form">
+        <div className="product-admin-heading">
+          <strong>{product.name}</strong>
+          <span className={isOutOfStock(product) ? "stock-inline danger" : "stock-inline"}>
+            {stockLabel(product)} // reserviert: {product.reservedQuantity ?? "-"}
+          </span>
+        </div>
+        <div className="product-admin-grid">
+          <TextInput label="Name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} />
+          <TextInput label="Jahr" value={draft.year} onChange={(value) => setDraft({ ...draft, year: value })} />
+          <TextInput label="Preis" type="number" value={draft.price} onChange={(value) => setDraft({ ...draft, price: value })} />
+          <TextInput label="Waehrung" value={draft.currency} onChange={(value) => setDraft({ ...draft, currency: value })} />
+          <TextInput label="Bild-URL" value={draft.imageUrl} onChange={(value) => setDraft({ ...draft, imageUrl: value })} />
+          <TextInput label="Alt-Text" value={draft.imageAlt} onChange={(value) => setDraft({ ...draft, imageAlt: value })} />
+        </div>
+        <TextArea label="Beschreibung" value={draft.description} onChange={(value) => setDraft({ ...draft, description: value })} />
+        <div className="product-admin-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => {
+              setDraft(productDraftFromProduct(product));
+            }}
+          >
+            Zuruecksetzen
+          </button>
+          <button className="add-button" type="button" disabled={saving} onClick={() => onSave(product.id, draft)}>
+            {saving ? "Speichert..." : "Artikel speichern"}
+          </button>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function productDraftFromProduct(product) {
+  return {
+    name: product.name || "",
+    year: product.year || "",
+    description: product.description || "",
+    price: String(product.price || "0.00"),
+    currency: product.currency || "EUR",
+    imageUrl: product.imageUrl || "",
+    imageAlt: product.imageAlt || product.name || "",
+    imageSource: product.imageSource || "",
+    imageLicense: product.imageLicense || "",
+    imageCredit: product.imageCredit || "",
+  };
+}
+
+function WarehouseAdminPanel({ error, onReload, onSave, products, savingProductId }) {
+  return (
+    <section className="product-admin-panel">
+      <div className="panel-title">
+        <Boxes size={18} />
+        <h2>Warehouse</h2>
+      </div>
+      {error && <p className="error">{error}</p>}
+      <div className="product-admin-actions">
+        <button className="link-button" type="button" onClick={onReload}>
+          <RefreshCw size={16} />
+          Bestände neu laden
+        </button>
+      </div>
+      <div className="warehouse-list">
+        {products.map((product) => (
+          <WarehouseAdminRow
+            key={product.id}
+            onSave={onSave}
+            product={product}
+            saving={savingProductId === product.id}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function WarehouseAdminRow({ onSave, product, saving }) {
+  const [stockDraft, setStockDraft] = useState(() => stockDraftFromProduct(product));
+
+  useEffect(() => {
+    setStockDraft(stockDraftFromProduct(product));
+  }, [product]);
+
+  return (
+    <article className="warehouse-row">
+      <div>
+        <strong>{product.name}</strong>
+        <small>{product.year} // {shortId(product.id)}</small>
+      </div>
+      <span className={isOutOfStock(product) ? "stock-inline danger" : "stock-inline"}>
+        {stockLabel(product)} // reserviert: {product.reservedQuantity ?? "-"}
+      </span>
+      <TextInput
+        label="Menge"
+        type="number"
+        value={stockDraft.quantityOnHand}
+        onChange={(value) => setStockDraft({ ...stockDraft, quantityOnHand: Number(value) })}
+      />
+      <TextInput label="Lagerort" value={stockDraft.location} onChange={(value) => setStockDraft({ ...stockDraft, location: value })} />
+      <button className="add-button" type="button" disabled={saving} onClick={() => onSave(product.id, stockDraft)}>
+        {saving ? "Speichert..." : "Bestand speichern"}
+      </button>
+    </article>
+  );
+}
+
+function stockDraftFromProduct(product) {
+  return {
+    quantityOnHand: product.quantityOnHand ?? 0,
+    location: product.location || "",
+  };
 }
 
 function OrderAdminDetail({ order, timeline }) {
