@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
@@ -86,6 +86,28 @@ function shortId(value = "") {
   return value ? `${value.slice(0, 8)}...${value.slice(-6)}` : "-";
 }
 
+function availableQuantity(product = {}) {
+  return typeof product.availableQuantity === "number" ? product.availableQuantity : null;
+}
+
+function stockLabel(product = {}) {
+  const available = availableQuantity(product);
+  if (available === null) return "Bestand wird geprueft";
+  if (available <= 0) return "Ausverkauft";
+  if (available === 1) return "Noch 1 Stueck verfuegbar";
+  return `Noch ${available} Stueck verfuegbar`;
+}
+
+function isOutOfStock(product = {}) {
+  const available = availableQuantity(product);
+  return available !== null && available <= 0;
+}
+
+function isAtStockLimit(product = {}, quantity = 0) {
+  const available = availableQuantity(product);
+  return available !== null && quantity >= available;
+}
+
 function navigate(path) {
   window.history.pushState({}, "", path);
   window.dispatchEvent(new PopStateEvent("popstate"));
@@ -169,6 +191,14 @@ function App() {
   const paypalReturnHandled = useRef("");
   const stripeReturnHandled = useRef("");
 
+  const loadProducts = useCallback(async () => {
+    const response = await fetch(`${SHOP_API}/products`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Produktkatalog nicht erreichbar: HTTP ${response.status}`);
+    const loadedProducts = await response.json();
+    setProducts(loadedProducts);
+    return loadedProducts;
+  }, []);
+
   useEffect(() => {
     const onPopState = () => setPath(window.location.pathname);
     window.addEventListener("popstate", onPopState);
@@ -176,18 +206,39 @@ function App() {
   }, []);
 
   useEffect(() => {
-    fetch(`${SHOP_API}/products`)
-      .then((response) => {
-        if (!response.ok) throw new Error(`Produktkatalog nicht erreichbar: HTTP ${response.status}`);
-        return response.json();
-      })
-      .then(setProducts)
-      .catch((caught) => setError(caught.message));
-  }, []);
+    loadProducts().catch((caught) => setError(caught.message));
+  }, [loadProducts]);
+
+  useEffect(() => {
+    if (path === "/") {
+      loadProducts().catch((caught) => setError(caught.message));
+    }
+  }, [loadProducts, path]);
 
   useEffect(() => {
     localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
   }, [cart]);
+
+  useEffect(() => {
+    if (products.length === 0) return;
+    setCart((current) => {
+      let changed = false;
+      const next = { ...current };
+      products.forEach((product) => {
+        const selected = next[product.id];
+        const available = availableQuantity(product);
+        if (!selected || available === null) return;
+        if (available <= 0) {
+          delete next[product.id];
+          changed = true;
+        } else if (selected > available) {
+          next[product.id] = available;
+          changed = true;
+        }
+      });
+      return changed ? next : current;
+    });
+  }, [products]);
 
   const cartItems = useMemo(
     () =>
@@ -200,7 +251,9 @@ function App() {
 
   function changeQuantity(productId, delta) {
     setCart((current) => {
-      const next = Math.max(0, (current[productId] || 0) + delta);
+      const product = products.find((entry) => entry.id === productId);
+      const maxQuantity = availableQuantity(product) ?? Number.MAX_SAFE_INTEGER;
+      const next = Math.max(0, Math.min(maxQuantity, (current[productId] || 0) + delta));
       const copy = { ...current };
       if (next === 0) {
         delete copy[productId];
@@ -212,6 +265,13 @@ function App() {
   }
 
   function addToCart(productId) {
+    const product = products.find((entry) => entry.id === productId);
+    const currentQuantity = cart[productId] || 0;
+    if (isAtStockLimit(product, currentQuantity)) {
+      setError("Mehr Bestand ist fuer diesen Artikel aktuell nicht verfuegbar.");
+      return;
+    }
+    setError("");
     changeQuantity(productId, 1);
   }
 
@@ -256,6 +316,7 @@ function App() {
       }
       const created = await response.json();
       const confirmedOrder = (await waitForOrderStatus(created.orderId)) || created;
+      await loadProducts();
       setOrder(confirmedOrder);
       setOrderConfirmation({
         order: confirmedOrder,
@@ -567,7 +628,7 @@ function ShopPage({ addToCart, cartItems, changeQuantity, error, products, total
     <section className="shop-layout">
       <div className="catalog">
         {products.map((product) => (
-          <article className="product" key={product.id}>
+          <article className={isOutOfStock(product) ? "product out-of-stock" : "product"} key={product.id}>
             <button className="image-button" onClick={() => navigate(`/products/${product.id}`)}>
               <img src={product.imageUrl} alt={product.imageAlt} />
             </button>
@@ -577,6 +638,10 @@ function ShopPage({ addToCart, cartItems, changeQuantity, error, products, total
                 <h2>{product.name}</h2>
               </button>
               <p className="year">{product.year}</p>
+              <p className={isOutOfStock(product) ? "stock-line danger" : "stock-line"}>
+                <Boxes size={15} />
+                {stockLabel(product)}
+              </p>
               <p>{product.description}</p>
               <small className="credit">
                 Bild: {product.imageCredit}, {product.imageLicense}
@@ -588,7 +653,11 @@ function ShopPage({ addToCart, cartItems, changeQuantity, error, products, total
                     <Minus size={16} />
                   </button>
                   <span>{cartItems.find((item) => item.id === product.id)?.quantity || 0}</span>
-                  <button onClick={() => changeQuantity(product.id, 1)} aria-label="Menge erhoehen">
+                  <button
+                    disabled={isAtStockLimit(product, cartItems.find((item) => item.id === product.id)?.quantity || 0)}
+                    onClick={() => changeQuantity(product.id, 1)}
+                    aria-label="Menge erhoehen"
+                  >
                     <Plus size={16} />
                   </button>
                 </div>
@@ -598,9 +667,9 @@ function ShopPage({ addToCart, cartItems, changeQuantity, error, products, total
                   <Eye size={16} />
                   Details
                 </button>
-                <button className="add-button" onClick={() => addToCart(product.id)}>
+                <button className="add-button" disabled={isOutOfStock(product)} onClick={() => addToCart(product.id)}>
                   <ShoppingCart size={16} />
-                  In den Warenkorb
+                  {isOutOfStock(product) ? "Ausverkauft" : "In den Warenkorb"}
                 </button>
               </div>
             </div>
@@ -637,11 +706,19 @@ function ProductDetailPage({ addToCart, cartItems, changeQuantity, product }) {
         <div className="detail-copy">
           <p className="year">{product.year}</p>
           <h1>{product.name}</h1>
+          <p className={isOutOfStock(product) ? "stock-line danger" : "stock-line"}>
+            <Boxes size={16} />
+            {stockLabel(product)}
+          </p>
           <p>{product.description}</p>
           <dl className="spec-grid">
             <div>
               <dt>Preis</dt>
               <dd>{formatPrice(product.price, product.currency)}</dd>
+            </div>
+            <div>
+              <dt>Bestand</dt>
+              <dd>{stockLabel(product)}</dd>
             </div>
             <div>
               <dt>Bildquelle</dt>
@@ -658,13 +735,13 @@ function ProductDetailPage({ addToCart, cartItems, changeQuantity, product }) {
                 <Minus size={16} />
               </button>
               <span>{quantity}</span>
-              <button onClick={() => changeQuantity(product.id, 1)} aria-label="Menge erhoehen">
+              <button disabled={isAtStockLimit(product, quantity)} onClick={() => changeQuantity(product.id, 1)} aria-label="Menge erhoehen">
                 <Plus size={16} />
               </button>
             </div>
-            <button className="add-button" onClick={() => addToCart(product.id)}>
+            <button className="add-button" disabled={isOutOfStock(product)} onClick={() => addToCart(product.id)}>
               <ShoppingCart size={16} />
-              In den Warenkorb
+              {isOutOfStock(product) ? "Ausverkauft" : "In den Warenkorb"}
             </button>
             <button className="checkout-button compact" disabled={quantity === 0} onClick={() => navigate("/cart")}>
               Warenkorb pruefen
@@ -691,6 +768,7 @@ function CartPanel({ cartItems, total }) {
             <li key={item.id}>
               <span>
                 {item.quantity}x {item.name}
+                <small className={isOutOfStock(item) ? "stock-inline danger" : "stock-inline"}>{stockLabel(item)}</small>
               </span>
               <strong>{formatPrice(Number(item.price) * item.quantity, item.currency)}</strong>
             </li>
@@ -739,6 +817,10 @@ function CartPage({ cartItems, changeQuantity, removeFromCart, total }) {
                       <h3>{item.name}</h3>
                     </button>
                     <small className="year">{item.year}</small>
+                    <small className={isOutOfStock(item) ? "stock-line danger" : "stock-line"}>
+                      <Boxes size={14} />
+                      {stockLabel(item)}
+                    </small>
                     <span>{formatPrice(item.price, item.currency)} pro Stueck</span>
                   </div>
                   <div className="cart-editor-controls">
@@ -747,7 +829,7 @@ function CartPage({ cartItems, changeQuantity, removeFromCart, total }) {
                         <Minus size={16} />
                       </button>
                       <span>{item.quantity}</span>
-                      <button onClick={() => changeQuantity(item.id, 1)} aria-label="Menge erhoehen">
+                      <button disabled={isAtStockLimit(item, item.quantity)} onClick={() => changeQuantity(item.id, 1)} aria-label="Menge erhoehen">
                         <Plus size={16} />
                       </button>
                     </div>
@@ -831,6 +913,7 @@ function CheckoutPage({
                 <li key={item.id}>
                   <span>
                     {item.quantity}x {item.name}
+                    <small className={isOutOfStock(item) ? "stock-inline danger" : "stock-inline"}>{stockLabel(item)}</small>
                   </span>
                   <strong>{formatPrice(Number(item.price) * item.quantity, item.currency)}</strong>
                 </li>

@@ -17,6 +17,19 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthResponse"
+  /stock:
+    get:
+      summary: List warehouse stock
+      operationId: listStock
+      responses:
+        "200":
+          description: Current stock per product
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StockResponse"
 components:
   schemas:
     HealthResponse:
@@ -29,3 +42,21 @@ components:
         service:
           type: string
           example: warehouse-service
+    StockResponse:
+      type: object
+      required: [productId, quantityOnHand, reservedQuantity, availableQuantity, location]
+      properties:
+        productId:
+          type: string
+          format: uuid
+        quantityOnHand:
+          type: integer
+          minimum: 0
+        reservedQuantity:
+          type: integer
+          minimum: 0
+        availableQuantity:
+          type: integer
+          minimum: 0
+        location:
+          type: string

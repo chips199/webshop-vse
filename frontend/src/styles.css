@@ -176,6 +176,38 @@ h2 {
   color: #77c96a;
 }
 
+.stock-line,
+.stock-inline {
+  color: #a8ff8b;
+}
+
+.stock-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 5px 8px;
+  border: 1px solid #315f2d;
+  background: #071907;
+  width: fit-content;
+}
+
+.stock-inline {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.stock-line.danger,
+.stock-inline.danger {
+  color: #ffb4b4;
+  border-color: #ff8f8f;
+}
+
+.product.out-of-stock img {
+  opacity: 0.58;
+}
+
 .credit {
   display: block;
   margin: 8px 0 14px;
@@ -227,6 +259,11 @@ h2 {
   color: #baff6f;
   background: #0b2b0b;
   border: 0;
+}
+
+.stepper button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .stepper button:hover,

@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request, Response
 from pydantic import BaseModel
 
 from .config import settings
+from .database import cancel_reservation, commit_reservation, init_database, list_stock, reserve_stock
 from .logging_config import configure_logging
 from .messaging import build_message, consume_messages, publish_message
 from .problem_details import register_problem_handlers
@@ -20,12 +21,13 @@ consumer_thread: threading.Thread | None = None
 def handle_warehouse_message(message: dict) -> None:
     if message["type"] == "warehouse.cancel.requested":
         payload = message.get("payload", {})
+        cancelled = cancel_reservation(payload["orderId"])
         event = build_message(
             "warehouse.cancel.succeeded",
             message["correlationId"],
             {
                 "orderId": payload["orderId"],
-                "cancelStatus": "SUCCEEDED",
+                "cancelStatus": "SUCCEEDED" if cancelled else "SKIPPED",
                 "reasonCode": payload.get("reasonCode", "CANCEL_REQUESTED"),
             },
             previous_event_id=message["messageId"],
@@ -54,6 +56,25 @@ def handle_warehouse_message(message: dict) -> None:
             publish_message("warehouse.commit.failed", event)
             return
 
+        committed = commit_reservation(payload["orderId"])
+        if not committed:
+            event = build_message(
+                "warehouse.commit.failed",
+                message["correlationId"],
+                {
+                    "orderId": payload["orderId"],
+                    "transactionId": payload["transactionId"],
+                    "provider": payload["provider"],
+                    "amount": payload["amount"],
+                    "currency": payload["currency"],
+                    "reasonCode": "WAREHOUSE_COMMIT_FAILED",
+                    "message": "Reservierung wurde nicht gefunden oder ist nicht mehr commitbar.",
+                },
+                previous_event_id=message["messageId"],
+            )
+            publish_message("warehouse.commit.failed", event)
+            return
+
         event = build_message(
             "warehouse.commit.succeeded",
             message["correlationId"],
@@ -76,7 +97,11 @@ def handle_warehouse_message(message: dict) -> None:
     order_id = payload["orderId"]
     items = payload.get("items", [])
     scenario = payload.get("scenario", "happy_path")
-    has_stock = scenario != "out_of_stock" and all(int(item.get("quantity", 0)) > 0 for item in items)
+    has_stock, reason_code = reserve_stock(order_id, items)
+    if scenario == "out_of_stock":
+        cancel_reservation(order_id)
+        has_stock = False
+        reason_code = "OUT_OF_STOCK"
 
     if has_stock:
         event_type = "warehouse.reservation.succeeded"
@@ -94,7 +119,7 @@ def handle_warehouse_message(message: dict) -> None:
         event_type = "warehouse.reservation.failed"
         event_payload = {
             "orderId": order_id,
-            "reasonCode": "OUT_OF_STOCK",
+            "reasonCode": reason_code or "OUT_OF_STOCK",
             "message": "Mindestens ein historisches Computerteil ist nicht verfuegbar.",
             "items": items,
         }
@@ -111,6 +136,7 @@ def handle_warehouse_message(message: dict) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global consumer_thread
+    init_database()
     stop_consumer_event.clear()
     consumer_thread = threading.Thread(
         target=consume_messages,
@@ -138,6 +164,14 @@ class HealthResponse(BaseModel):
     service: str
 
 
+class StockResponse(BaseModel):
+    productId: str
+    quantityOnHand: int
+    reservedQuantity: int
+    availableQuantity: int
+    location: str
+
+
 @app.middleware("http")
 async def correlation_id_middleware(request: Request, call_next):
     correlation_id = request.headers.get("X-Correlation-Id") or str(uuid4())
@@ -150,3 +184,17 @@ async def correlation_id_middleware(request: Request, call_next):
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     return HealthResponse(service=settings.service_name)
+
+
+@app.get("/stock", response_model=list[StockResponse])
+async def stock() -> list[StockResponse]:
+    return [
+        StockResponse(
+            productId=str(entry["productId"]),
+            quantityOnHand=entry["quantityOnHand"],
+            reservedQuantity=entry["reservedQuantity"],
+            availableQuantity=entry["availableQuantity"],
+            location=entry["location"],
+        )
+        for entry in list_stock()
+    ]

@@ -348,6 +348,10 @@ class ProductResponse(BaseModel):
     imageSource: str
     imageLicense: str
     imageCredit: str
+    quantityOnHand: int | None = None
+    reservedQuantity: int | None = None
+    availableQuantity: int | None = None
+    stockStatus: str = "UNKNOWN"
 
 
 class OrderResponse(BaseModel):
@@ -421,8 +425,13 @@ async def health() -> HealthResponse:
 
 
 @app.get("/products", response_model=list[ProductResponse])
-async def list_products() -> list[ProductResponse]:
-    return [ProductResponse(**_serialize_product(product)) for product in get_products()]
+async def list_products(response: Response) -> list[ProductResponse]:
+    response.headers["Cache-Control"] = "no-store"
+    stock_by_product_id = fetch_warehouse_stock()
+    return [
+        ProductResponse(**_serialize_product(product, stock_by_product_id.get(str(product["id"]))))
+        for product in get_products()
+    ]
 
 
 @app.post("/orders", response_model=OrderResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -618,11 +627,21 @@ async def admin_order_audit(orderId: str, _: str = Depends(require_admin)) -> Ad
     )
 
 
-def _serialize_product(product: dict) -> dict:
-    return {
+def _serialize_product(product: dict, stock: dict | None = None) -> dict:
+    serialized = {
         **product,
         "id": str(product["id"]),
         "price": str(product["price"]),
+    }
+    if stock is None:
+        return {**serialized, "stockStatus": "UNKNOWN"}
+    available = int(stock["availableQuantity"])
+    return {
+        **serialized,
+        "quantityOnHand": int(stock["quantityOnHand"]),
+        "reservedQuantity": int(stock["reservedQuantity"]),
+        "availableQuantity": available,
+        "stockStatus": "OUT_OF_STOCK" if available <= 0 else "AVAILABLE",
     }
 
 
@@ -655,3 +674,15 @@ def fetch_audit_snapshots(correlation_id: str) -> list[dict]:
     except (HTTPError, URLError, TimeoutError) as exc:
         raise HTTPException(status_code=502, detail=f"Audit service unavailable: {exc}") from exc
     return body.get("snapshots", [])
+
+
+def fetch_warehouse_stock() -> dict[str, dict]:
+    url = f"{settings.warehouse_service_url.rstrip('/')}/stock"
+    request = UrlRequest(url, headers={"X-Correlation-Id": str(uuid4())})
+    try:
+        with urlopen(request, timeout=3) as response:
+            stock_entries = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError) as exc:
+        logger.warning("Warehouse stock unavailable", extra={"context": {"error": str(exc)}})
+        return {}
+    return {entry["productId"]: entry for entry in stock_entries}

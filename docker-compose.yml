@@ -38,6 +38,7 @@ services:
       DATABASE_URL: postgresql://webshop:webshop@postgres:5432/shop_service
       RABBITMQ_URL: amqp://webshop:webshop@rabbitmq:5672/
       AUDIT_SERVICE_URL: http://audit-service:8004
+      WAREHOUSE_SERVICE_URL: http://warehouse-service:8001
       INVOICE_CIRCUIT_BREAKER_FAILURE_THRESHOLD: 3
       INVOICE_CIRCUIT_BREAKER_RESET_SECONDS: 30
       INVOICE_CIRCUIT_BREAKER_HALF_OPEN_MAX_CALLS: 1

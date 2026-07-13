@@ -209,6 +209,21 @@ components:
           type: string
         imageCredit:
           type: string
+        quantityOnHand:
+          type: integer
+          nullable: true
+          minimum: 0
+        reservedQuantity:
+          type: integer
+          nullable: true
+          minimum: 0
+        availableQuantity:
+          type: integer
+          nullable: true
+          minimum: 0
+        stockStatus:
+          type: string
+          enum: [AVAILABLE, OUT_OF_STOCK, UNKNOWN]
     CreateOrderRequest:
       type: object
       required: [customer, shippingAddress, items, payment]

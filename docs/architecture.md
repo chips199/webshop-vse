@@ -60,7 +60,7 @@ flowchart LR
 | --- | --- |
 | React Frontend | Externe UI fuer Bestellung und Admin-Dashboard |
 | Shop-Service | Externe Order API, Produktkatalog, correlationId, Order-Status, Saga-Orchestrierung; DB `shop_service` |
-| Warehouse-Service | Bestand pruefen, Reservierung anlegen, stornieren und final ausbuchen; DB `warehouse_service` vorbereitet |
+| Warehouse-Service | Bestand verwalten, Reservierung anlegen, stornieren und final ausbuchen; DB `warehouse_service` |
 | Billing-Service | Zahlungsfluss, Payment-Fassade, Checkout-Sessions, Refunds; DB `billing_service` vorbereitet |
 | Invoice-Service | PDF-Rechnungserstellung, persistente Invoice-Metadaten und Retry-Mechanismus; DB `invoice_service` |
 | Audit-Service | Unveraenderliche Audit-Snapshots chronologisch bereitstellen; DB `audit_service` |
@@ -72,6 +72,29 @@ flowchart LR
 Externe Clients sprechen REST/OpenAPI mit dem Shop-Service und Audit-Service.
 Interne Service-Kommunikation laeuft ueber RabbitMQ. Commands fordern Arbeit an,
 Events beschreiben ein bereits eingetretenes Ergebnis.
+
+Bestandsveraendernde Warehouse-Aktionen laufen ueber RabbitMQ. Fuer die
+kundenseitige Produktanzeige stellt der Warehouse-Service zusaetzlich den
+Read-Endpoint `GET /stock` bereit; der Shop-Service reichert damit seinen
+Produktkatalog um `availableQuantity` an.
+
+### Warehouse-Management
+
+Der Warehouse-Service persistiert Bestandsdaten in PostgreSQL:
+
+- `warehouse_stock`: Gesamtbestand, reservierte Menge, verfuegbare Menge und Lagerort pro Produkt
+- `warehouse_reservations`: Reservierung je Bestellung mit Status `RESERVED`, `COMMITTED` oder `CANCELLED`
+
+Bei `warehouse.reserve.requested` prueft der Service innerhalb einer
+Datenbanktransaktion, ob alle Artikel ausreichend verfuegbar sind. Erfolgreiche
+Reservierungen erhoehen `reserved_quantity`; die Ware ist dadurch fuer andere
+Bestellungen nicht mehr verfuegbar. Bei fehlendem Bestand wird
+`warehouse.reservation.failed` mit `OUT_OF_STOCK` publiziert.
+
+Bei erfolgreicher Zahlung sendet der Shop-Service `warehouse.commit.requested`.
+Der Warehouse-Service reduziert dann `quantity_on_hand` und `reserved_quantity`
+und publiziert `warehouse.commit.succeeded`. Schlaegt die Zahlung fehl, wird per
+`warehouse.cancel.requested` nur die Reservierung geloest.
 
 Alle Messages verwenden ein gemeinsames Envelope:
 
