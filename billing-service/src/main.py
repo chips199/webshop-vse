@@ -47,6 +47,7 @@ def publish_payment_result(
         }
     else:
         event_type = "billing.payment.failed"
+        payment_result = "TIMEOUT" if reason_code == "PAYMENT_TIMEOUT" else "DECLINED"
         event_payload = {
             "orderId": order_id,
             "provider": provider,
@@ -57,6 +58,8 @@ def publish_payment_result(
         }
         if transaction_id:
             event_payload["transactionId"] = transaction_id
+    if status == "SUCCEEDED":
+        payment_result = "SUCCEEDED"
     event = build_message(
         event_type,
         correlation_id,
@@ -64,6 +67,20 @@ def publish_payment_result(
         previous_event_id=previous_event_id,
     )
     publish_message(event_type, event)
+    logger.info(
+        "Payment attempt finished",
+        extra={
+            "correlation_id": correlation_id,
+            "context": {
+                "eventType": event_type,
+                "orderId": order_id,
+                "provider": provider,
+                "paymentStatus": status,
+                "paymentResult": payment_result,
+                "reasonCode": reason_code,
+            },
+        },
+    )
 
 
 def handle_billing_message(message: dict) -> None:
@@ -94,20 +111,19 @@ def handle_billing_message(message: dict) -> None:
     scenario = payload.get("scenario", "happy_path")
     if scenario in {"payment_failed", "payment_timeout"}:
         reason_code = "PAYMENT_TIMEOUT" if scenario == "payment_timeout" else "PAYMENT_DECLINED"
-        event = build_message(
-            "billing.payment.failed",
-            message["correlationId"],
-            {
-                "orderId": payload["orderId"],
-                "provider": payload.get("provider") or settings.payment_provider,
-                "amount": payload["amount"],
-                "currency": payload["currency"],
-                "reasonCode": reason_code,
-                "message": "Payment-Stub simuliert eine fehlgeschlagene Zahlung.",
-            },
+        publish_payment_result(
+            status="FAILED",
+            correlation_id=message["correlationId"],
             previous_event_id=message["messageId"],
+            order_id=payload["orderId"],
+            transaction_id=None,
+            provider=payload.get("provider") or settings.payment_provider,
+            amount=payload["amount"],
+            currency=payload["currency"],
+            scenario=scenario,
+            reason_code=reason_code,
+            message="Payment-Stub simuliert eine fehlgeschlagene Zahlung.",
         )
-        publish_message("billing.payment.failed", event)
         return
 
     provider = payload.get("provider") or settings.payment_provider
@@ -139,7 +155,18 @@ def handle_billing_message(message: dict) -> None:
         )
         return
     if result.status.value == "PENDING":
-        logger.info("Payment confirmation pending for order %s via %s", payload["orderId"], result.provider)
+        logger.info(
+            "Payment confirmation pending",
+            extra={
+                "correlation_id": message["correlationId"],
+                "context": {
+                    "eventType": "billing.payment.pending",
+                    "orderId": payload["orderId"],
+                    "provider": result.provider,
+                    "paymentStatus": result.status.value,
+                },
+            },
+        )
         return
     if result.status.value != "SUCCEEDED":
         publish_payment_result(

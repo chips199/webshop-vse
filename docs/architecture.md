@@ -229,6 +229,20 @@ Alle Services schreiben strukturierte JSON-Logs auf die Konsole und in taeglich
 rotierende Log-Dateien unter `logs/<service>.log`. Die Aufbewahrung ist auf 14
 Tage konfiguriert.
 
+Zusaetzlich wird ein zentraler Loki/Grafana-Stack per Docker Compose
+ausgeliefert. Promtail liest die Docker-Logs aller Container, extrahiert die
+JSON-Felder `service`, `level`, `correlationId`, `eventType`, `paymentResult`,
+`provider` und `reasonCode` und sendet sie an Loki. Grafana ist unter
+`http://localhost:3001` erreichbar und laedt automatisch das Dashboard
+`Webshop Zentrales Log-Management`.
+
+Das Dashboard zeigt:
+
+- Anzahl der Bestellungen pro Zeitintervall anhand von `eventType=order.accepted`
+- Fehlerrate nach Service anhand von `level=ERROR`
+- Zahlungsversuche nach Ergebnis anhand von `paymentResult=SUCCEEDED`,
+  `DECLINED` oder `TIMEOUT`
+
 ### Invoice-Retry und PDF-Rechnungen
 
 Der Invoice-Service erzeugt PDF-Rechnungen im Retro-Design als echte PDF-Dateien

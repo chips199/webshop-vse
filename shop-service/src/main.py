@@ -512,7 +512,7 @@ async def create_order(request: Request, order: CreateOrderRequest) -> OrderResp
         "Order accepted for asynchronous processing",
         extra={
             "correlation_id": correlation_id,
-            "context": {"orderId": order_id, "itemCount": len(order.items)},
+            "context": {"eventType": "order.accepted", "orderId": order_id, "itemCount": len(order.items)},
         },
     )
     return OrderResponse(
