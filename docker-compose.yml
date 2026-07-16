@@ -45,8 +45,12 @@ services:
       ADMIN_USERNAME: admin
       ADMIN_PASSWORD: admin123
       ADMIN_COOKIE_SECURE: "false"
+      PRODUCT_IMAGE_UPLOAD_DIR: /app/uploads/product-images
+      SHOP_PUBLIC_BASE_URL: http://localhost:8000
     ports:
       - "8000:8000"
+    volumes:
+      - shop-image-uploads:/app/uploads/product-images
     depends_on:
       postgres:
         condition: service_healthy
@@ -173,6 +177,7 @@ services:
 
 volumes:
   postgres-data:
+  shop-image-uploads:
   invoice-data:
   loki-data:
   grafana-data:

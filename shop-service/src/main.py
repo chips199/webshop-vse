@@ -3,6 +3,8 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
+from pathlib import Path
+import re
 import secrets
 import threading
 from urllib.error import HTTPError, URLError
@@ -10,8 +12,9 @@ from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from psycopg.errors import UniqueViolation
 
@@ -34,6 +37,7 @@ from .resilience import CircuitBreaker, CircuitBreakerOpenError
 
 configure_logging()
 logger = logging.getLogger(__name__)
+Path(settings.product_image_upload_dir).mkdir(parents=True, exist_ok=True)
 stop_consumer_event = threading.Event()
 consumer_thread: threading.Thread | None = None
 invoice_circuit_breaker = CircuitBreaker(
@@ -275,6 +279,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Historical Computer Parts Shop API", version="0.1.0", lifespan=lifespan)
 register_problem_handlers(app)
+app.mount(
+    "/product-images",
+    StaticFiles(directory=settings.product_image_upload_dir, check_dir=False),
+    name="uploaded-product-images",
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
@@ -420,6 +429,11 @@ class AdminOrderResponse(BaseModel):
 class AdminAuditResponse(BaseModel):
     orderId: str
     snapshots: list[dict]
+
+
+class ImageUploadResponse(BaseModel):
+    imageUrl: str
+    filename: str
 
 
 def _token_hash(token: str) -> str:
@@ -660,6 +674,32 @@ async def admin_products(_: str = Depends(require_admin)) -> list[ProductRespons
         ProductResponse(**_serialize_product(product, stock_by_product_id.get(str(product["id"]))))
         for product in get_products()
     ]
+
+
+@app.post("/admin/product-images", response_model=ImageUploadResponse)
+async def admin_upload_product_image(
+    file: UploadFile = File(...),
+    _: str = Depends(require_admin),
+) -> ImageUploadResponse:
+    content_types = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/webp": ".webp",
+    }
+    if file.content_type not in content_types:
+        raise HTTPException(status_code=415, detail="Only PNG, JPEG and WebP images are supported")
+    content = await file.read()
+    if len(content) > 6 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Image must not be larger than 6 MB")
+    original_stem = Path(file.filename or "product-image").stem.lower()
+    safe_stem = re.sub(r"[^a-z0-9]+", "-", original_stem).strip("-") or "product-image"
+    filename = f"{safe_stem}-{uuid4().hex[:10]}{content_types[file.content_type]}"
+    output_path = Path(settings.product_image_upload_dir) / filename
+    output_path.write_bytes(content)
+    return ImageUploadResponse(
+        imageUrl=f"{settings.shop_public_base_url.rstrip('/')}/product-images/{filename}",
+        filename=filename,
+    )
 
 
 @app.post("/admin/products", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)

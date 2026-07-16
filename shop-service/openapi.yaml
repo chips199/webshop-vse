@@ -182,6 +182,36 @@ paths:
                 $ref: "#/components/schemas/Product"
         "401":
           description: Admin login required
+  /admin/product-images:
+    post:
+      summary: Upload a product image for admin-managed catalog entries
+      security:
+        - AdminCookie: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: PNG, JPEG or WebP image up to 6 MB.
+      responses:
+        "200":
+          description: Uploaded image URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageUploadResponse"
+        "401":
+          description: Admin login required
+        "413":
+          description: Image is larger than 6 MB
+        "415":
+          description: Unsupported image format
   /admin/products/{productId}:
     put:
       summary: Update product master data
@@ -373,6 +403,15 @@ components:
         location:
           type: string
           nullable: true
+    ImageUploadResponse:
+      type: object
+      required: [imageUrl, filename]
+      properties:
+        imageUrl:
+          type: string
+          format: uri
+        filename:
+          type: string
     CreateOrderRequest:
       type: object
       required: [customer, shippingAddress, items, payment]

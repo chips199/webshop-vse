@@ -123,6 +123,56 @@ button {
   gap: 14px;
 }
 
+.catalog-toolbar {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 2px solid #315f2d;
+  background: #071907;
+}
+
+.catalog-search {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 2px solid #315f2d;
+  background: #020802;
+  color: #77c96a;
+  padding: 0 10px;
+}
+
+.catalog-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: #e7ffe2;
+  font: inherit;
+}
+
+.catalog-search input:focus {
+  outline: 0;
+}
+
+.catalog-count {
+  color: #baff6f;
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+
+.empty-catalog {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 18px;
+  border: 2px solid #315f2d;
+  background: #071907;
+  color: #77c96a;
+}
+
 .product {
   min-height: 420px;
   padding: 14px;
@@ -221,6 +271,46 @@ h2 {
   grid-template-columns: 1fr;
   gap: 8px;
   margin-top: 12px;
+}
+
+.pagination {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px;
+  border: 2px solid #315f2d;
+  background: #071907;
+}
+
+.pagination span {
+  color: #baff6f;
+  text-transform: uppercase;
+}
+
+.page-jump {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.page-number {
+  width: 42px;
+  height: 42px;
+  border: 2px solid #315f2d;
+  background: #020802;
+  color: #a8ff8b;
+  font-weight: 700;
+}
+
+.page-number.active,
+.page-number:hover {
+  border-color: #70f05b;
+  background: #70f05b;
+  color: #061006;
 }
 
 .image-button,
@@ -438,6 +528,14 @@ h2 {
   min-height: 86px;
   padding: 10px;
   resize: vertical;
+}
+
+.image-upload-field input {
+  padding: 8px 10px;
+}
+
+.image-upload-field small {
+  margin-top: 6px;
 }
 
 .field input:focus,
@@ -1122,6 +1220,7 @@ h2 {
 
 @media (max-width: 940px) {
   .shop-layout,
+  .catalog-toolbar,
   .checkout-form,
   .admin-grid,
   .admin-metrics,

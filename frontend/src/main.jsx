@@ -206,6 +206,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [path]);
+
+  useEffect(() => {
     loadProducts().catch((caught) => setError(caught.message));
   }, [loadProducts]);
 
@@ -624,10 +628,58 @@ function Header({ path }) {
 }
 
 function ShopPage({ addToCart, cartItems, changeQuantity, error, products, total }) {
+  const productsPerPage = 8;
+  const [page, setPage] = useState(1);
+  const [searchTerm, setSearchTerm] = useState("");
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+  const filteredProducts = useMemo(() => {
+    if (!normalizedSearch) return products;
+    return products.filter((product) =>
+      [product.name, product.year, product.description]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedSearch),
+    );
+  }, [normalizedSearch, products]);
+  const pageCount = Math.max(1, Math.ceil(filteredProducts.length / productsPerPage));
+  const visibleProducts = filteredProducts.slice((page - 1) * productsPerPage, page * productsPerPage);
+
+  function goToPage(nextPage) {
+    setPage(Math.min(pageCount, Math.max(1, nextPage)));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  useEffect(() => {
+    setPage(1);
+  }, [products.length, normalizedSearch]);
+
+  useEffect(() => {
+    if (page > pageCount) {
+      setPage(pageCount);
+    }
+  }, [page, pageCount]);
+
   return (
     <section className="shop-layout">
       <div className="catalog">
-        {products.map((product) => (
+        <div className="catalog-toolbar">
+          <label className="catalog-search">
+            <Search size={16} />
+            <input
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder="Artikel suchen"
+            />
+          </label>
+          <span className="catalog-count">
+            {filteredProducts.length} von {products.length} Artikeln
+          </span>
+        </div>
+        {visibleProducts.length === 0 && (
+          <p className="empty-catalog">Keine passenden historischen Computerteile gefunden.</p>
+        )}
+        {visibleProducts.map((product) => (
           <article className={isOutOfStock(product) ? "product out-of-stock" : "product"} key={product.id}>
             <button className="image-button" onClick={() => navigate(`/products/${product.id}`)}>
               <img src={product.imageUrl} alt={product.imageAlt} />
@@ -672,6 +724,32 @@ function ShopPage({ addToCart, cartItems, changeQuantity, error, products, total
             </div>
           </article>
         ))}
+        {filteredProducts.length > productsPerPage && (
+          <div className="pagination">
+            <button className="secondary-button" disabled={page === 1} onClick={() => goToPage(page - 1)}>
+              <ArrowLeft size={16} />
+              Zurueck
+            </button>
+            <div className="page-jump">
+              {Array.from({ length: pageCount }, (_, index) => index + 1).map((pageNumber) => (
+                <button
+                  className={pageNumber === page ? "page-number active" : "page-number"}
+                  key={pageNumber}
+                  onClick={() => goToPage(pageNumber)}
+                  aria-label={`Seite ${pageNumber} aufrufen`}
+                >
+                  {pageNumber}
+                </button>
+              ))}
+            </div>
+            <span>
+              Seite {page} von {pageCount}
+            </span>
+            <button className="secondary-button" disabled={page === pageCount} onClick={() => goToPage(page + 1)}>
+              Weiter
+            </button>
+          </div>
+        )}
       </div>
       <CartPanel cartItems={cartItems} total={total} />
       {error && <p className="error">{error}</p>}
@@ -1197,6 +1275,21 @@ function AdminPage() {
     setProducts(await response.json());
   }
 
+  async function uploadProductImage(file) {
+    setProductError("");
+    const body = new FormData();
+    body.append("file", file);
+    const response = await fetch(`${SHOP_API}/admin/product-images`, {
+      method: "POST",
+      credentials: "include",
+      body,
+    });
+    if (!response.ok) {
+      throw new Error(`Bild konnte nicht hochgeladen werden: HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
   async function createProduct(productDraft) {
     setSavingProductId("new");
     setProductError("");
@@ -1340,6 +1433,7 @@ function AdminPage() {
         <ProductAdminPanel
           error={productError}
           onCreate={createProduct}
+          onImageUpload={uploadProductImage}
           onReload={loadAdminProducts}
           products={products}
           savingProductId={savingProductId}
@@ -1411,14 +1505,14 @@ function Metric({ icon, label, tone = "", value }) {
   );
 }
 
-function ProductAdminPanel({ error, onCreate, onReload, onSave, products, savingProductId }) {
+function ProductAdminPanel({ error, onCreate, onImageUpload, onReload, onSave, products, savingProductId }) {
   return (
     <section className="product-admin-panel">
       <div className="panel-title">
         <Cpu size={18} />
         <h2>Artikel</h2>
       </div>
-      <ProductCreateForm onCreate={onCreate} saving={savingProductId === "new"} />
+      <ProductCreateForm onCreate={onCreate} onImageUpload={onImageUpload} saving={savingProductId === "new"} />
       {error && <p className="error">{error}</p>}
       <div className="product-admin-actions">
         <button className="link-button" type="button" onClick={onReload}>
@@ -1435,6 +1529,7 @@ function ProductAdminPanel({ error, onCreate, onReload, onSave, products, saving
               key={product.id}
               product={product}
               saving={savingProductId === product.id}
+              onImageUpload={onImageUpload}
               onSave={onSave}
             />
           ))}
@@ -1444,8 +1539,25 @@ function ProductAdminPanel({ error, onCreate, onReload, onSave, products, saving
   );
 }
 
-function ProductCreateForm({ onCreate, saving }) {
+function ProductCreateForm({ onCreate, onImageUpload, saving }) {
   const [draft, setDraft] = useState(emptyProductDraft);
+  const [uploading, setUploading] = useState(false);
+  async function handleImageUpload(file) {
+    setUploading(true);
+    try {
+      const uploaded = await onImageUpload(file);
+      setDraft({
+        ...draft,
+        imageUrl: uploaded.imageUrl,
+        imageAlt: draft.imageAlt || draft.name || "Produktbild",
+        imageSource: "Admin upload",
+        imageLicense: "Uploaded project asset",
+        imageCredit: "Shop admin",
+      });
+    } finally {
+      setUploading(false);
+    }
+  }
   return (
     <form
       className="product-create-form"
@@ -1466,6 +1578,7 @@ function ProductCreateForm({ onCreate, saving }) {
         <TextInput label="Preis" type="number" value={draft.price} onChange={(value) => setDraft({ ...draft, price: value })} />
         <TextInput label="Waehrung" value={draft.currency} onChange={(value) => setDraft({ ...draft, currency: value })} />
         <TextInput label="Bild-URL" value={draft.imageUrl} onChange={(value) => setDraft({ ...draft, imageUrl: value })} />
+        <ImageUploadField label="Bild hochladen" onUpload={handleImageUpload} uploading={uploading} />
         <TextInput label="Alt-Text" value={draft.imageAlt} onChange={(value) => setDraft({ ...draft, imageAlt: value })} />
         <TextInput
           label="Startbestand"
@@ -1486,12 +1599,30 @@ function ProductCreateForm({ onCreate, saving }) {
   );
 }
 
-function ProductAdminRow({ onSave, product, saving }) {
+function ProductAdminRow({ onImageUpload, onSave, product, saving }) {
   const [draft, setDraft] = useState(() => productDraftFromProduct(product));
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     setDraft(productDraftFromProduct(product));
   }, [product]);
+
+  async function handleImageUpload(file) {
+    setUploading(true);
+    try {
+      const uploaded = await onImageUpload(file);
+      setDraft({
+        ...draft,
+        imageUrl: uploaded.imageUrl,
+        imageAlt: draft.imageAlt || product.name || "Produktbild",
+        imageSource: "Admin upload",
+        imageLicense: "Uploaded project asset",
+        imageCredit: "Shop admin",
+      });
+    } finally {
+      setUploading(false);
+    }
+  }
 
   return (
     <article className="product-admin-row">
@@ -1509,6 +1640,7 @@ function ProductAdminRow({ onSave, product, saving }) {
           <TextInput label="Preis" type="number" value={draft.price} onChange={(value) => setDraft({ ...draft, price: value })} />
           <TextInput label="Waehrung" value={draft.currency} onChange={(value) => setDraft({ ...draft, currency: value })} />
           <TextInput label="Bild-URL" value={draft.imageUrl} onChange={(value) => setDraft({ ...draft, imageUrl: value })} />
+          <ImageUploadField label="Bild hochladen" onUpload={handleImageUpload} uploading={uploading} />
           <TextInput label="Alt-Text" value={draft.imageAlt} onChange={(value) => setDraft({ ...draft, imageAlt: value })} />
         </div>
         <TextArea label="Beschreibung" value={draft.description} onChange={(value) => setDraft({ ...draft, description: value })} />
@@ -1528,6 +1660,33 @@ function ProductAdminRow({ onSave, product, saving }) {
         </div>
       </div>
     </article>
+  );
+}
+
+function ImageUploadField({ label, onUpload, uploading }) {
+  const [error, setError] = useState("");
+  return (
+    <label className="field image-upload-field">
+      <span>{label}</span>
+      <input
+        accept="image/png,image/jpeg,image/webp"
+        disabled={uploading}
+        type="file"
+        onChange={async (event) => {
+          const file = event.target.files?.[0];
+          if (!file) return;
+          setError("");
+          try {
+            await onUpload(file);
+          } catch (caught) {
+            setError(caught.message);
+          } finally {
+            event.target.value = "";
+          }
+        }}
+      />
+      {error && <small className="error">{error}</small>}
+    </label>
   );
 }
 

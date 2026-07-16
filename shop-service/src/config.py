@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     admin_password: str = "admin123"
     admin_session_hours: int = 8
     admin_cookie_secure: bool = False
+    product_image_upload_dir: str = "/app/uploads/product-images"
+    shop_public_base_url: str = "http://localhost:8000"
 
 
 settings = Settings()
