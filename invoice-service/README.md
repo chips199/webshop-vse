@@ -6,7 +6,8 @@ messages are consumed from RabbitMQ.
 ## Local endpoints
 
 - `GET /health`
-- `GET /invoices/{invoiceId}`
+- `GET /invoices/{invoiceId}` returns invoice metadata and the PDF download URL.
+- `GET /invoices/{invoiceId}/pdf` downloads the generated invoice PDF.
 
 ## RabbitMQ
 
@@ -15,9 +16,10 @@ messages are consumed from RabbitMQ.
 - Publishes `invoice.created`
 - Publishes `invoice.failed`
 
-Invoices are rendered as retro-styled PDF files and stored in the configured
-invoice output directory. Metadata and retry status are stored in the
-`invoice_service` PostgreSQL database.
+Invoices are rendered as retro-styled PDF files with order number, transaction,
+customer, shipping address, billing address, purchased items and total amount.
+They are stored in the configured invoice output directory. Metadata and retry
+status are stored in the `invoice_service` PostgreSQL database.
 
 ## Configuration
 

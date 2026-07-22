@@ -203,17 +203,23 @@ def request_invoice_with_circuit(order_id: str, correlation_id: str, payload: di
         )
         return
 
+    order = get_order_record(order_id) or {}
+    invoice_payload = {
+        "orderId": order_id,
+        "transactionId": payload["transactionId"],
+        "provider": payload["provider"],
+        "amount": payload["amount"],
+        "currency": payload["currency"],
+        "scenario": payload.get("scenario", "happy_path"),
+        "customer": order.get("customer") or {},
+        "shippingAddress": order.get("shippingAddress") or {},
+        "billingAddress": order.get("billingAddress"),
+        "items": order.get("items") or [],
+    }
     invoice_requested = build_message(
         "invoice.create.requested",
         correlation_id,
-        {
-            "orderId": order_id,
-            "transactionId": payload["transactionId"],
-            "provider": payload["provider"],
-            "amount": payload["amount"],
-            "currency": payload["currency"],
-            "scenario": payload.get("scenario", "happy_path"),
-        },
+        invoice_payload,
         previous_event_id=previous_message["messageId"],
     )
     publish_message("invoice.create.requested", invoice_requested)

@@ -26,6 +26,29 @@ class InvoicePdfTest(unittest.TestCase):
             "provider": "stripe",
             "amount": "149.90",
             "currency": "EUR",
+            "customer": {
+                "firstName": "Ada",
+                "lastName": "Lovelace",
+                "email": "ada@example.test",
+                "phone": "+49 30 123456",
+            },
+            "shippingAddress": {
+                "street": "Retroallee",
+                "houseNumber": "8",
+                "postalCode": "10115",
+                "city": "Berlin",
+                "country": "DE",
+            },
+            "items": [
+                {
+                    "productId": "22222222-2222-2222-2222-222222222222",
+                    "name": "Intel 8086 CPU",
+                    "quantity": 2,
+                    "unitPrice": "74.95",
+                    "lineTotal": "149.90",
+                    "currency": "EUR",
+                }
+            ],
         }
         with tempfile.TemporaryDirectory() as temp_dir:
             original_invoice_dir = main.invoice_dir
@@ -41,7 +64,28 @@ class InvoicePdfTest(unittest.TestCase):
 
             self.assertTrue(path.exists())
             self.assertEqual(path.suffix, ".pdf")
-            self.assertTrue(path.read_bytes().startswith(b"%PDF-1.4"))
+            pdf = path.read_bytes()
+            self.assertTrue(pdf.startswith(b"%PDF-1.4"))
+            self.assertIn(b"Ada Lovelace", pdf)
+            self.assertIn(b"Retroallee 8", pdf)
+            self.assertIn(b"Intel 8086 CPU", pdf)
+            self.assertIn(b"Gesamtbetrag: 149.90 EUR", pdf)
+
+    def test_serialize_invoice_converts_database_types(self) -> None:
+        invoice = {
+            "invoiceId": "22222222-2222-2222-2222-222222222222",
+            "orderId": "11111111-1111-1111-1111-111111111111",
+            "correlationId": "33333333-3333-3333-3333-333333333333",
+            "status": "CREATED",
+            "pdfPath": "invoices/22222222-2222-2222-2222-222222222222.pdf",
+            "attempts": 1,
+            "lastError": None,
+        }
+
+        serialized = main._serialize_invoice(invoice)
+
+        self.assertEqual(serialized["invoiceId"], "22222222-2222-2222-2222-222222222222")
+        self.assertEqual(serialized["downloadUrl"], "/invoices/22222222-2222-2222-2222-222222222222/pdf")
 
 
 if __name__ == "__main__":

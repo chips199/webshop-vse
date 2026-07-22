@@ -6,6 +6,7 @@ import time
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from .config import settings
@@ -101,6 +102,15 @@ def handle_invoice_message(message: dict) -> None:
 def create_invoice_pdf(invoice_id: str, correlation_id: str, payload: dict) -> Path:
     invoice_dir.mkdir(parents=True, exist_ok=True)
     invoice_path = invoice_dir / f"{invoice_id}.pdf"
+    invoice_path.write_bytes(render_pdf(build_invoice_lines(invoice_id, correlation_id, payload)))
+    return invoice_path
+
+
+def build_invoice_lines(invoice_id: str, correlation_id: str, payload: dict) -> list[str]:
+    customer = payload.get("customer") or {}
+    shipping_address = payload.get("shippingAddress") or {}
+    billing_address = payload.get("billingAddress") or shipping_address
+    items = payload.get("items") or []
     lines = [
         "RETRO PARTS TERMINAL",
         "Rechnung fuer historische Computerteile",
@@ -108,12 +118,64 @@ def create_invoice_pdf(invoice_id: str, correlation_id: str, payload: dict) -> P
         f"Bestellung: {payload['orderId']}",
         f"Transaktion: {payload['transactionId']}",
         f"Zahlungsanbieter: {payload['provider']}",
-        f"Betrag: {payload['amount']} {payload['currency']}",
+        "",
+        "Kunde",
+        _format_customer(customer),
+        f"E-Mail: {customer.get('email', '-')}",
+        f"Telefon: {customer.get('phone') or '-'}",
+        "",
+        "Lieferanschrift",
+        *_format_address(shipping_address),
+        "",
+        "Rechnungsanschrift",
+        *_format_address(billing_address),
+        "",
+        "Positionen",
+        "Menge  Artikel                                      Einzel       Summe",
+        *[_format_invoice_item(item, payload["currency"]) for item in items],
+        "",
+        f"Gesamtbetrag: {_money(payload['amount'], payload['currency'])}",
         f"Correlation-ID: {correlation_id}",
+        "",
         "Vielen Dank fuer deinen Einkauf im Retro Parts Terminal.",
     ]
-    invoice_path.write_bytes(render_pdf(lines))
-    return invoice_path
+    return lines
+
+
+def _format_customer(customer: dict) -> str:
+    name = " ".join(
+        value for value in [customer.get("firstName", "").strip(), customer.get("lastName", "").strip()] if value
+    )
+    return name or "-"
+
+
+def _format_address(address: dict) -> list[str]:
+    if not address:
+        return ["-"]
+    street = " ".join(
+        value for value in [str(address.get("street", "")).strip(), str(address.get("houseNumber", "")).strip()] if value
+    )
+    city = " ".join(
+        value for value in [str(address.get("postalCode", "")).strip(), str(address.get("city", "")).strip()] if value
+    )
+    country = str(address.get("country", "")).strip()
+    return [line for line in [street, city, country] if line] or ["-"]
+
+
+def _format_invoice_item(item: dict, fallback_currency: str) -> str:
+    quantity = int(item.get("quantity", 0))
+    name = str(item.get("name") or item.get("productId") or "Artikel")
+    unit_price = _money(item.get("unitPrice", "0.00"), item.get("currency") or fallback_currency)
+    line_total = _money(item.get("lineTotal", "0.00"), item.get("currency") or fallback_currency)
+    return f"{quantity:>5}  {_truncate(name, 42):<42}  {unit_price:>10}  {line_total:>10}"
+
+
+def _money(amount, currency: str) -> str:
+    return f"{amount} {currency}"
+
+
+def _truncate(value: str, max_length: int) -> str:
+    return value if len(value) <= max_length else f"{value[: max_length - 3]}..."
 
 
 def render_pdf(lines: list[str]) -> bytes:
@@ -132,9 +194,11 @@ def render_pdf(lines: list[str]) -> bytes:
     ]
     y = 680
     for index, line in enumerate(escaped_lines):
-        font_size = 15 if index < 2 else 11
+        if y < 70:
+            break
+        font_size = 15 if index < 2 else 10
         content_lines.append(f"BT /F1 {font_size} Tf 54 {y} Td ({line}) Tj ET")
-        y -= 28
+        y -= 18 if line else 12
     content_lines.extend(
         [
             "0.44 0.94 0.36 rg",
@@ -205,6 +269,7 @@ class InvoiceResponse(BaseModel):
     correlationId: str
     status: str
     pdfPath: str | None = None
+    downloadUrl: str | None = None
     attempts: int
     lastError: str | None = None
 
@@ -228,4 +293,32 @@ async def get_invoice(invoiceId: str) -> InvoiceResponse:
     invoice = get_invoice_record(invoiceId)
     if not invoice:
         raise HTTPException(status_code=404, detail=f"Invoice {invoiceId} not found")
-    return InvoiceResponse(**invoice)
+    return InvoiceResponse(**_serialize_invoice(invoice))
+
+
+@app.get("/invoices/{invoiceId}/pdf")
+async def download_invoice_pdf(invoiceId: str) -> FileResponse:
+    invoice = get_invoice_record(invoiceId)
+    if not invoice:
+        raise HTTPException(status_code=404, detail=f"Invoice {invoiceId} not found")
+    if invoice.get("status") != "CREATED" or not invoice.get("pdfPath"):
+        raise HTTPException(status_code=409, detail=f"Invoice {invoiceId} is not ready for download")
+    pdf_path = Path(invoice["pdfPath"])
+    if not pdf_path.exists() or not pdf_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Invoice PDF for {invoiceId} not found")
+    return FileResponse(
+        path=pdf_path,
+        media_type="application/pdf",
+        filename=f"retro-parts-invoice-{invoiceId}.pdf",
+    )
+
+
+def _serialize_invoice(invoice: dict) -> dict:
+    invoice_id = str(invoice["invoiceId"])
+    return {
+        **invoice,
+        "invoiceId": invoice_id,
+        "orderId": str(invoice["orderId"]),
+        "correlationId": str(invoice["correlationId"]),
+        "downloadUrl": f"/invoices/{invoice_id}/pdf" if invoice.get("pdfPath") else None,
+    }
