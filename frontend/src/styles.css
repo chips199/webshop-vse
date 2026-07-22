@@ -964,6 +964,17 @@ h2 {
   gap: 10px;
 }
 
+.admin-list-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.admin-pagination {
+  margin-top: 2px;
+}
+
 .warehouse-list {
   display: grid;
   gap: 10px;
@@ -1225,6 +1236,7 @@ h2 {
   .admin-grid,
   .admin-metrics,
   .admin-toolbar,
+  .admin-list-toolbar,
   .admin-detail-grid,
   .product-admin-row,
   .product-admin-grid,

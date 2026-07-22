@@ -1506,6 +1506,38 @@ function Metric({ icon, label, tone = "", value }) {
 }
 
 function ProductAdminPanel({ error, onCreate, onImageUpload, onReload, onSave, products, savingProductId }) {
+  const adminProductsPerPage = 5;
+  const [page, setPage] = useState(1);
+  const [searchTerm, setSearchTerm] = useState("");
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+  const filteredProducts = useMemo(() => {
+    if (!normalizedSearch) return products;
+    return products.filter((product) =>
+      [product.name, product.year, product.description, product.location, product.id]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedSearch),
+    );
+  }, [normalizedSearch, products]);
+  const pageCount = Math.max(1, Math.ceil(filteredProducts.length / adminProductsPerPage));
+  const visibleProducts = filteredProducts.slice((page - 1) * adminProductsPerPage, page * adminProductsPerPage);
+
+  function goToPage(nextPage) {
+    setPage(Math.min(pageCount, Math.max(1, nextPage)));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  useEffect(() => {
+    setPage(1);
+  }, [products.length, normalizedSearch]);
+
+  useEffect(() => {
+    if (page > pageCount) {
+      setPage(pageCount);
+    }
+  }, [page, pageCount]);
+
   return (
     <section className="product-admin-panel">
       <div className="panel-title">
@@ -1520,11 +1552,24 @@ function ProductAdminPanel({ error, onCreate, onImageUpload, onReload, onSave, p
           Artikel neu laden
         </button>
       </div>
-      {products.length === 0 ? (
-        <p className="muted">Keine Artikel geladen.</p>
+      <div className="admin-list-toolbar">
+        <label className="admin-search">
+          <Search size={16} />
+          <input
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            placeholder="Artikel suchen"
+          />
+        </label>
+        <span className="catalog-count">
+          {filteredProducts.length} von {products.length} Artikeln
+        </span>
+      </div>
+      {filteredProducts.length === 0 ? (
+        <p className="muted">Keine passenden Artikel gefunden.</p>
       ) : (
         <div className="product-admin-list">
-          {products.map((product) => (
+          {visibleProducts.map((product) => (
             <ProductAdminRow
               key={product.id}
               product={product}
@@ -1534,6 +1579,9 @@ function ProductAdminPanel({ error, onCreate, onImageUpload, onReload, onSave, p
             />
           ))}
         </div>
+      )}
+      {filteredProducts.length > adminProductsPerPage && (
+        <AdminPagination page={page} pageCount={pageCount} onPageChange={goToPage} />
       )}
     </section>
   );
@@ -1706,6 +1754,47 @@ function productDraftFromProduct(product) {
 }
 
 function WarehouseAdminPanel({ error, onReload, onSave, products, savingProductId }) {
+  const warehouseProductsPerPage = 8;
+  const [page, setPage] = useState(1);
+  const [searchTerm, setSearchTerm] = useState("");
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+  const filteredProducts = useMemo(() => {
+    if (!normalizedSearch) return products;
+    return products.filter((product) =>
+      [
+        product.name,
+        product.year,
+        product.location,
+        product.stockStatus,
+        product.id,
+        product.quantityOnHand,
+        product.availableQuantity,
+        product.reservedQuantity,
+      ]
+        .filter((value) => value !== null && value !== undefined)
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedSearch),
+    );
+  }, [normalizedSearch, products]);
+  const pageCount = Math.max(1, Math.ceil(filteredProducts.length / warehouseProductsPerPage));
+  const visibleProducts = filteredProducts.slice((page - 1) * warehouseProductsPerPage, page * warehouseProductsPerPage);
+
+  function goToPage(nextPage) {
+    setPage(Math.min(pageCount, Math.max(1, nextPage)));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  useEffect(() => {
+    setPage(1);
+  }, [products.length, normalizedSearch]);
+
+  useEffect(() => {
+    if (page > pageCount) {
+      setPage(pageCount);
+    }
+  }, [page, pageCount]);
+
   return (
     <section className="product-admin-panel">
       <div className="panel-title">
@@ -1719,17 +1808,66 @@ function WarehouseAdminPanel({ error, onReload, onSave, products, savingProductI
           Bestände neu laden
         </button>
       </div>
-      <div className="warehouse-list">
-        {products.map((product) => (
-          <WarehouseAdminRow
-            key={product.id}
-            onSave={onSave}
-            product={product}
-            saving={savingProductId === product.id}
+      <div className="admin-list-toolbar">
+        <label className="admin-search">
+          <Search size={16} />
+          <input
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            placeholder="Bestand suchen"
           />
+        </label>
+        <span className="catalog-count">
+          {filteredProducts.length} von {products.length} Artikeln
+        </span>
+      </div>
+      {filteredProducts.length === 0 ? (
+        <p className="muted">Keine passenden Bestände gefunden.</p>
+      ) : (
+        <div className="warehouse-list">
+          {visibleProducts.map((product) => (
+            <WarehouseAdminRow
+              key={product.id}
+              onSave={onSave}
+              product={product}
+              saving={savingProductId === product.id}
+            />
+          ))}
+        </div>
+      )}
+      {filteredProducts.length > warehouseProductsPerPage && (
+        <AdminPagination page={page} pageCount={pageCount} onPageChange={goToPage} />
+      )}
+    </section>
+  );
+}
+
+function AdminPagination({ page, pageCount, onPageChange }) {
+  return (
+    <div className="pagination admin-pagination">
+      <button className="secondary-button" disabled={page === 1} onClick={() => onPageChange(page - 1)}>
+        <ArrowLeft size={16} />
+        Zurueck
+      </button>
+      <div className="page-jump">
+        {Array.from({ length: pageCount }, (_, index) => index + 1).map((pageNumber) => (
+          <button
+            className={pageNumber === page ? "page-number active" : "page-number"}
+            key={pageNumber}
+            onClick={() => onPageChange(pageNumber)}
+            aria-label={`Seite ${pageNumber} aufrufen`}
+          >
+            {pageNumber}
+          </button>
         ))}
       </div>
-    </section>
+      <span>
+        Seite {page} von {pageCount}
+      </span>
+      <button className="secondary-button" disabled={page === pageCount} onClick={() => onPageChange(page + 1)}>
+        Weiter
+      </button>
+    </div>
   );
 }
 
