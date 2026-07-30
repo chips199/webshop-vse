@@ -15,3 +15,4 @@ class PaymentResult:
     provider: str
     status: PaymentStatus
     reason: str | None = None
+    redirect_url: str | None = None

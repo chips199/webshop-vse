@@ -8,8 +8,8 @@ class AsyncPaymentWebhookTest(unittest.IsolatedAsyncioTestCase):
     async def test_success_webhook_publishes_payment_succeeded_event(self) -> None:
         request = AsyncPaymentWebhookRequest(
             orderId="order-async-1",
-            transactionId="async-stub-order-async-1",
-            provider="async-stub",
+            transactionId="paypal-order-async-1",
+            provider="paypal",
             amount="49.90",
             currency="EUR",
             status="SUCCEEDED",
@@ -32,8 +32,8 @@ class AsyncPaymentWebhookTest(unittest.IsolatedAsyncioTestCase):
     async def test_failure_webhook_publishes_payment_failed_event(self) -> None:
         request = AsyncPaymentWebhookRequest(
             orderId="order-async-2",
-            transactionId="async-stub-order-async-2",
-            provider="async-stub",
+            transactionId="paypal-order-async-2",
+            provider="paypal",
             amount="49.90",
             currency="EUR",
             status="FAILED",
@@ -50,7 +50,7 @@ class AsyncPaymentWebhookTest(unittest.IsolatedAsyncioTestCase):
         routing_key, message = publish_message.call_args.args
         self.assertEqual(routing_key, "billing.payment.failed")
         self.assertEqual(message["payload"]["orderId"], "order-async-2")
-        self.assertEqual(message["payload"]["transactionId"], "async-stub-order-async-2")
+        self.assertEqual(message["payload"]["transactionId"], "paypal-order-async-2")
         self.assertEqual(message["payload"]["reasonCode"], "ASYNC_DECLINED")
 
 

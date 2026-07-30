@@ -409,6 +409,7 @@ def init_database() -> None:
             cursor.execute("ALTER TABLE shop_orders ADD COLUMN IF NOT EXISTS billing_address JSONB NULL;")
             cursor.execute("ALTER TABLE shop_orders ADD COLUMN IF NOT EXISTS idempotency_key TEXT NULL;")
             cursor.execute("ALTER TABLE shop_orders ADD COLUMN IF NOT EXISTS request_hash TEXT NULL;")
+            cursor.execute("ALTER TABLE shop_orders ADD COLUMN IF NOT EXISTS payment_redirect_url TEXT NULL;")
             cursor.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_shop_orders_idempotency_key
@@ -485,6 +486,17 @@ def update_order_status(order_id: str, status: str) -> None:
             cursor.execute(query, (status, order_id))
 
 
+def update_payment_action_required(order_id: str, transaction_id: str, redirect_url: str) -> None:
+    query = """
+    UPDATE shop_orders
+    SET status = %s, transaction_id = %s, payment_redirect_url = %s, updated_at = now()
+    WHERE id = %s;
+    """
+    with psycopg.connect(settings.database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(query, ("PAYMENT_ACTION_REQUIRED", transaction_id, redirect_url, order_id))
+
+
 def update_payment_succeeded(order_id: str, transaction_id: str) -> None:
     query = """
     UPDATE shop_orders
@@ -548,10 +560,12 @@ def get_order(order_id: str) -> dict[str, Any] | None:
         customer,
         shipping_address AS "shippingAddress",
         billing_address AS "billingAddress",
+        payment,
         transaction_id AS "transactionId",
         invoice_id AS "invoiceId",
         invoice_status AS "invoiceStatus",
-        warehouse_commit_status AS "warehouseCommitStatus"
+        warehouse_commit_status AS "warehouseCommitStatus",
+        payment_redirect_url AS "paymentRedirectUrl"
     FROM shop_orders
     WHERE id = %s;
     """

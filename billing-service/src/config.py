@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     paypal_base_url: str = "https://api-m.sandbox.paypal.com"
     async_payment_webhook_url: str = "http://localhost:8002/webhooks/payment-stub"
     async_payment_webhook_delay_seconds: float = 2.0
+    shop_frontend_base_url: str = "http://localhost:3000"
     payment_retry_max_attempts: int = 3
     payment_retry_backoff_seconds: float = 0.5
 

@@ -90,24 +90,29 @@ Der Payload enthaelt nur die fachlichen Zahlungsdaten:
 Payload wiederholt, weil sie bereits fuer jede Message einheitlich im Envelope
 stehen.
 
-### Asynchrone Zahlungsbestaetigung
+### Asynchrone Zahlungsbestaetigung (Stripe & PayPal)
 
-Der Anbieter `async-stub` bestaetigt Zahlungen nicht direkt im Rueckgabewert von
-`charge()`. Der erste Aufruf liefert intern `PENDING`; der Billing-Service
-publiziert dabei noch kein Payment-Event. Nach der konfigurierten Verzoegerung
-sendet der Stub einen HTTP-Webhook an den Billing-Service. Erst dieser Webhook
-wird in eines der bestehenden RabbitMQ-Events uebersetzt:
+Mit Sandbox-Credentials bestaetigt keiner der beiden Adapter Zahlungen direkt
+im Rueckgabewert von `charge()`: der Aufruf liefert immer `PENDING`.
+Billing-Service publiziert dazu `billing.payment.pending`
+(`payload.redirectUrl` ist nur bei echten Sandbox-Credentials gesetzt).
+Shop-Service reagiert nur, wenn `redirectUrl` vorhanden ist, und setzt die
+Order auf `PAYMENT_ACTION_REQUIRED`.
+
+**Ohne** PayPal-Credentials (Stub, Bonus 4.4) sendet der Adapter nach der
+konfigurierten Verzoegerung selbst einen HTTP-Webhook an den Billing-Service.
+Erst dieser Webhook wird in eines der bestehenden RabbitMQ-Events uebersetzt:
 
 - `billing.payment.succeeded`
 - `billing.payment.failed`
 
-Beispiel fuer den internen Webhook-Request:
+Beispiel fuer den internen Stub-Webhook-Request:
 
 ```json
 {
   "orderId": "f102c63a-8321-4e64-8fb6-d95a0b8d1f09",
-  "transactionId": "async-stub-f102c63a-8321-4e64-8fb6-d95a0b8d1f09",
-  "provider": "async-stub",
+  "transactionId": "paypal-f102c63a-8321-4e64-8fb6-d95a0b8d1f09",
+  "provider": "paypal",
   "amount": "49.90",
   "currency": "EUR",
   "status": "SUCCEEDED",
@@ -115,6 +120,14 @@ Beispiel fuer den internen Webhook-Request:
   "previousEventId": "ab8d54de-a7b4-49b4-91d2-7166c43f99bd"
 }
 ```
+
+**Mit** echten Sandbox-Credentials (Stripe oder PayPal) leitet das Frontend
+den Browser stattdessen zur echten Sandbox-Zahlungsseite weiter
+(`payload.redirectUrl`). Nach Rueckkehr ruft das Frontend
+`POST /orders/{orderId}/payment-confirmation` bei shop-service auf, das
+`billing.payment.confirm.requested` publiziert; Billing-Service fuehrt darauf
+die echte Session-Pruefung (Stripe) bzw. den echten Capture (PayPal) aus und
+publiziert danach ebenfalls `billing.payment.succeeded`/`billing.payment.failed`.
 
 ## Fehler und Kompensation
 

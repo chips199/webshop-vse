@@ -205,30 +205,49 @@ Pflichtoperationen:
 
 Anbieter:
 
-- `StripeAdapter`
-- `PayPalAdapter`
-- `AsyncWebhookStubAdapter` fuer asynchrone Zahlungsbestaetigungen
+- `StripeAdapter` - mit `STRIPE_SECRET_KEY` immer asynchron per Redirect zu
+  einer echten Stripe Checkout Session; ohne Key sofortiger lokaler Stub.
+- `PayPalAdapter` - mit Credentials immer asynchron per Redirect zur echten
+  PayPal-Freigabeseite; ohne Credentials Stub mit simuliertem Webhook
+  (Bonus 4.4, siehe unten).
 
 Der aktive Anbieter wird per Konfiguration gesetzt, zum Beispiel
-`PAYMENT_PROVIDER=stripe`, `PAYMENT_PROVIDER=paypal` oder
-`PAYMENT_PROVIDER=async-stub`.
+`PAYMENT_PROVIDER=stripe` oder `PAYMENT_PROVIDER=paypal`.
 
 Adapter registrieren sich automatisch ueber die Basisklasse `PaymentAdapter`.
 Ein weiterer Anbieter wird als neue Adapterklasse mit eigenem `provider_name`
 hinzugefuegt; die Fassade selbst muss dafuer nicht geaendert werden.
 
-### Asynchroner Payment-Webhook-Stub
+### Echter Redirect vs. simulierter Webhook (Bonus 4.4)
 
-Der Anbieter `async-stub` simuliert einen asynchronen Zahlungsanbieter:
-`charge()` liefert sofort `PaymentStatus.PENDING` zurueck. Der Billing-Service
-publiziert in diesem Moment noch kein Saga-Event. Nach der konfigurierbaren
-Verzoegerung `ASYNC_PAYMENT_WEBHOOK_DELAY_SECONDS` sendet der Stub einen
-Webhook an `POST /webhooks/payment-stub`. Dieser Webhook wird vom Billing-Service
-in das bestehende RabbitMQ-Event `billing.payment.succeeded` oder
-`billing.payment.failed` uebersetzt. Dadurch kann der Shop-Service den
-Saga-Ablauf unveraendert ueber die bestehenden Payment-Events fortsetzen.
+Mit Sandbox-Credentials liefert `charge()` bei beiden Anbietern nie sofort ein
+Endergebnis, sondern immer `PaymentStatus.PENDING` mit einer echten
+`redirect_url` (Stripe Checkout Session bzw. PayPal-Freigabeseite). Der Ablauf
+ist fuer beide Anbieter identisch:
 
-Fuer Tests kann das finale Ergebnis im Payment-Payload ueber
+- Billing-Service publiziert `billing.payment.pending` mit `redirectUrl`;
+  Shop-Service setzt die Order auf `PAYMENT_ACTION_REQUIRED` und liefert die
+  URL ueber `GET /orders/{orderId}` aus. Das Frontend leitet den Browser
+  dorthin weiter.
+- Nach Rueckkehr ruft das Frontend `POST /orders/{orderId}/payment-confirmation`
+  bei Shop-Service auf; dieser publiziert `billing.payment.confirm.requested`,
+  worauf Billing-Service ueber die Fassade `getStatus()` aufruft -
+  `get_status()` fuehrt dabei den echten Capture (PayPal) bzw. die
+  Session-Pruefung (Stripe) aus und liefert SUCCEEDED/FAILED.
+
+**Nur PayPal** simuliert diesen Ablauf zusaetzlich als Stub, wenn keine
+Credentials gesetzt sind (Bonus 4.4 der Aufgabenstellung): `charge()` liefert
+PENDING, nach der konfigurierbaren Verzoegerung `ASYNC_PAYMENT_WEBHOOK_DELAY_SECONDS`
+sendet der Stub sich selbst einen Webhook an `POST /webhooks/payment-stub`.
+Stripe bleibt ohne Credentials ein einfacher, sofort erfolgreicher Stub.
+Der Webhook wird von Billing-Service in das bestehende RabbitMQ-Event
+`billing.payment.succeeded` oder `billing.payment.failed` uebersetzt.
+
+In beiden Faellen setzt der Shop-Service die Saga unveraendert ueber die
+bestehenden Payment-Events fort (Invoice-Anforderung, Warehouse-Commit, ggf.
+Refund-Kompensation).
+
+Fuer Tests kann das finale Stub-Ergebnis im Payment-Payload ueber
 `webhookStatus=SUCCEEDED` oder `webhookStatus=FAILED` gesteuert werden.
 
 ### API- und Fehlerkonventionen

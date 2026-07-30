@@ -70,6 +70,37 @@ paths:
                 $ref: "#/components/schemas/OrderResponse"
         "404":
           description: Order not found
+  /orders/{orderId}/payment-confirmation:
+    post:
+      summary: Resume a PayPal order after the buyer returns from the real sandbox redirect
+      description: >
+        Only valid while the order status is PAYMENT_ACTION_REQUIRED. "approved" continues the
+        saga by asking billing-service to capture the payment; "cancelled" fails the order and
+        triggers the warehouse cancellation compensation.
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaymentConfirmationRequest"
+      responses:
+        "202":
+          description: Confirmation accepted for asynchronous processing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderResponse"
+        "404":
+          description: Order not found
+        "409":
+          description: Order is not awaiting a payment confirmation
   /admin/login:
     post:
       summary: Login as admin and receive an HttpOnly session cookie
@@ -474,7 +505,7 @@ components:
       properties:
         provider:
           type: string
-          enum: [paypal, stripe, async-stub]
+          enum: [paypal, stripe]
         currency:
           type: string
           example: EUR
@@ -495,28 +526,16 @@ components:
         paypalEmail:
           type: string
           description: PayPal sandbox buyer email entered in the checkout UI.
-        paypalOrderId:
-          type: string
-          description: PayPal sandbox order id approved by the buyer.
-        paypalCaptureId:
-          type: string
-          description: PayPal sandbox capture id after successful capture.
-        approveUrl:
-          type: string
-          description: PayPal approval URL opened by the checkout UI.
-        status:
-          type: string
-          description: Last known PayPal sandbox status.
         webhookStatus:
           type: string
           enum: [SUCCEEDED, FAILED]
-          description: Test-only final status for the async-stub payment provider.
+          description: Test-only final status for the PayPal stub webhook (no PayPal credentials configured).
         webhookReasonCode:
           type: string
-          description: Test-only reason code for a failed async-stub webhook.
+          description: Test-only reason code for a failed PayPal stub webhook.
         webhookMessage:
           type: string
-          description: Test-only message for a failed async-stub webhook.
+          description: Test-only message for a failed PayPal stub webhook.
     OrderResponse:
       type: object
       required: [orderId, correlationId, status]
@@ -535,6 +554,21 @@ components:
         currency:
           type: string
           nullable: true
+        transactionId:
+          type: string
+          nullable: true
+        paymentRedirectUrl:
+          type: string
+          format: uri
+          nullable: true
+          description: Set while status is PAYMENT_ACTION_REQUIRED; the frontend redirects the browser here.
+    PaymentConfirmationRequest:
+      type: object
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [approved, cancelled]
     AdminLoginRequest:
       type: object
       required: [username, password]

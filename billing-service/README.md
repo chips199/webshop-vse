@@ -1,19 +1,19 @@
 # Billing Service
 
-FastAPI service for payment processing through a payment facade. PayPal, Stripe
-and an asynchronous webhook stub are available behind the facade. With sandbox
-credentials the adapters call Stripe/PayPal sandbox APIs; without credentials
-they fall back to deterministic local stubs.
+FastAPI service for payment processing through a payment facade. PayPal and
+Stripe are available behind the facade. With sandbox credentials the adapters
+call the Stripe/PayPal sandbox APIs; without credentials they fall back to
+deterministic local stubs.
 
 ## Local endpoints
 
 - `GET /health`
 - `GET /payments/{transactionId}/status`
-- `POST /paypal/orders`
-- `POST /paypal/orders/{paypalOrderId}/capture`
-- `POST /stripe/sessions`
-- `GET /stripe/sessions/{sessionId}`
 - `POST /webhooks/payment-stub`
+
+Billing-service is not exposed to clients directly. It is only reached
+through `billing.payment.requested`, `billing.payment.confirm.requested` and
+`billing.refund.requested` messages published by shop-service.
 
 ## Configuration
 
@@ -27,17 +27,34 @@ they fall back to deterministic local stubs.
 - `PAYPAL_CLIENT_ID`
 - `PAYPAL_CLIENT_SECRET`
 - `PAYPAL_BASE_URL`
+- `SHOP_FRONTEND_BASE_URL`
 - `ASYNC_PAYMENT_WEBHOOK_URL`
 - `ASYNC_PAYMENT_WEBHOOK_DELAY_SECONDS`
 
-## Async webhook stub
+## Real sandbox redirect vs. simulated webhook (Bonus 4.4)
 
-Set `PAYMENT_PROVIDER=async-stub` to simulate an asynchronous payment provider.
-`charge()` returns `PENDING` immediately. After
-`ASYNC_PAYMENT_WEBHOOK_DELAY_SECONDS`, the stub posts to
-`ASYNC_PAYMENT_WEBHOOK_URL`. The Billing-Service then publishes
-`billing.payment.succeeded` or `billing.payment.failed` and the existing Saga
-continues through RabbitMQ.
+With sandbox credentials set, neither adapter resolves `charge()`
+synchronously - both always return `PENDING`:
+
+- `StripeAdapter` (with `STRIPE_SECRET_KEY`) creates a real Stripe Checkout
+  Session and returns a `redirect_url` to the real hosted payment page.
+- `PayPalAdapter` (with `PAYPAL_CLIENT_ID`/`PAYPAL_CLIENT_SECRET`) creates a
+  real PayPal sandbox order and returns a `redirect_url` to the real approval
+  page.
+
+Both URLs are built from `SHOP_FRONTEND_BASE_URL`. shop-service exposes the
+URL so the frontend can redirect the buyer's browser there. After the buyer
+returns, shop-service publishes `billing.payment.confirm.requested`, which
+makes billing-service call `getStatus()` (real Stripe session check / PayPal
+capture) to resolve the payment.
+
+Only `PayPalAdapter` also simulates this async shape without credentials
+(Bonus 4.4): after `ASYNC_PAYMENT_WEBHOOK_DELAY_SECONDS`, the stub posts to
+itself at `ASYNC_PAYMENT_WEBHOOK_URL` (`POST /webhooks/payment-stub`).
+Billing-service then publishes `billing.payment.succeeded` or
+`billing.payment.failed` and the existing Saga continues through RabbitMQ.
+`StripeAdapter` without credentials stays a simple, immediately successful
+local stub.
 
 For tests, pass `webhookStatus` in the payment metadata:
 

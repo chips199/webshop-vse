@@ -12,7 +12,6 @@ from .config import settings
 from .logging_config import configure_logging
 from .messaging import build_message, consume_messages, publish_message
 from .payment import PaymentFacadeError, get_payment_facade
-from .payment.adapters import PaymentAdapter
 from .problem_details import register_problem_handlers
 
 configure_logging()
@@ -85,6 +84,52 @@ def publish_payment_result(
 
 
 def handle_billing_message(message: dict) -> None:
+    if message["type"] == "billing.payment.confirm.requested":
+        payload = message.get("payload", {})
+        provider = payload.get("provider") or settings.payment_provider
+        facade = get_payment_facade(provider)
+        try:
+            result = facade.get_status(payload["transactionId"], correlation_id=message["correlationId"])
+        except PaymentFacadeError as exc:
+            publish_payment_result(
+                status="FAILED",
+                correlation_id=message["correlationId"],
+                previous_event_id=message["messageId"],
+                order_id=payload["orderId"],
+                transaction_id=payload.get("transactionId"),
+                provider=provider,
+                amount=payload["amount"],
+                currency=payload["currency"],
+                reason_code="PAYMENT_PROVIDER_ERROR",
+                message=str(exc),
+            )
+            return
+        if result.status.value != "SUCCEEDED":
+            publish_payment_result(
+                status="FAILED",
+                correlation_id=message["correlationId"],
+                previous_event_id=message["messageId"],
+                order_id=payload["orderId"],
+                transaction_id=result.transaction_id,
+                provider=result.provider,
+                amount=payload["amount"],
+                currency=payload["currency"],
+                reason_code="PAYMENT_DECLINED",
+                message=result.reason or "Payment provider did not confirm the payment.",
+            )
+            return
+        publish_payment_result(
+            status=result.status.value,
+            correlation_id=message["correlationId"],
+            previous_event_id=message["messageId"],
+            order_id=payload["orderId"],
+            transaction_id=result.transaction_id,
+            provider=result.provider,
+            amount=payload["amount"],
+            currency=payload["currency"],
+        )
+        return
+
     if message["type"] == "billing.refund.requested":
         payload = message.get("payload", {})
         provider = payload.get("provider") or settings.payment_provider
@@ -201,6 +246,7 @@ def handle_billing_message(message: dict) -> None:
                 "amount": payload["amount"],
                 "currency": payload["currency"],
                 "paymentStatus": result.status.value,
+                "redirectUrl": result.redirect_url,
             },
             previous_event_id=message["messageId"],
         )
@@ -251,7 +297,11 @@ async def lifespan(app: FastAPI):
     stop_consumer_event.clear()
     consumer_thread = threading.Thread(
         target=consume_messages,
-        args=(["billing.payment.requested", "billing.refund.requested"], handle_billing_message, stop_consumer_event),
+        args=(
+            ["billing.payment.requested", "billing.payment.confirm.requested", "billing.refund.requested"],
+            handle_billing_message,
+            stop_consumer_event,
+        ),
         daemon=True,
     )
     consumer_thread.start()
@@ -285,67 +335,10 @@ class PaymentStatusResponse(BaseModel):
     status: str
 
 
-class PayPalCreateOrderRequest(BaseModel):
-    referenceId: str
-    amount: str
-    currency: str = "EUR"
-    returnUrl: str | None = None
-    cancelUrl: str | None = None
-
-
-class PayPalCreateOrderResponse(BaseModel):
-    orderId: str
-    status: str
-    approveUrl: str | None = None
-    stub: bool = False
-
-
-class PayPalCaptureResponse(BaseModel):
-    orderId: str
-    captureId: str
-    status: str
-    payer: dict | None = None
-    shippingAddress: dict | None = None
-    stub: bool = False
-
-
-class StripeCheckoutItem(BaseModel):
-    name: str
-    amount: str
-    quantity: int = 1
-
-
-class StripeCreateSessionRequest(BaseModel):
-    referenceId: str
-    amount: str
-    currency: str = "EUR"
-    successUrl: str | None = None
-    cancelUrl: str | None = None
-    customerEmail: str | None = None
-    items: list[StripeCheckoutItem] | None = None
-
-
-class StripeCreateSessionResponse(BaseModel):
-    sessionId: str
-    status: str
-    paymentStatus: str
-    checkoutUrl: str | None = None
-    stub: bool = False
-
-
-class StripeSessionResponse(BaseModel):
-    sessionId: str
-    status: str | None = None
-    paymentStatus: str | None = None
-    customer: dict | None = None
-    shippingAddress: dict | None = None
-    stub: bool = False
-
-
 class AsyncPaymentWebhookRequest(BaseModel):
     orderId: str
     transactionId: str
-    provider: str = "async-stub"
+    provider: str = "paypal"
     amount: str
     currency: str = "EUR"
     status: str
@@ -406,76 +399,3 @@ async def receive_async_payment_webhook(request: AsyncPaymentWebhookRequest) -> 
     )
     event_type = "billing.payment.succeeded" if status == "SUCCEEDED" else "billing.payment.failed"
     return AsyncPaymentWebhookResponse(eventType=event_type)
-
-
-def _get_adapter(provider: str) -> PaymentAdapter:
-    """Direkter Adapter-Zugriff nur fuer die Checkout-Hilfsendpunkte unten.
-
-    Diese Endpunkte sind kein Teil des in Abschnitt 3.1 geforderten
-    Facade-Interfaces (charge/refund/getStatus) - hier hat der Client
-    (Frontend) den Provider bereits explizit gewaehlt, es gibt also
-    keine Konfigurationsentscheidung zu kapseln. Der eigentliche
-    Bestell-/Zahlungsfluss (handle_billing_message) nutzt weiterhin
-    ausschliesslich get_payment_facade().
-    """
-    try:
-        adapter_class = PaymentAdapter.registry[provider]
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=404, detail=f"Unsupported payment provider '{provider}'"
-        ) from exc
-    return adapter_class()
-
-
-@app.post("/paypal/orders", response_model=PayPalCreateOrderResponse)
-async def create_paypal_order(request: PayPalCreateOrderRequest) -> PayPalCreateOrderResponse:
-    adapter = _get_adapter("paypal")
-    try:
-        result = adapter.create_order(
-            request.referenceId,
-            Decimal(request.amount),
-            request.currency,
-            request.returnUrl,
-            request.cancelUrl,
-        )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return PayPalCreateOrderResponse(**result)
-
-
-@app.post("/paypal/orders/{paypalOrderId}/capture", response_model=PayPalCaptureResponse)
-async def capture_paypal_order(paypalOrderId: str) -> PayPalCaptureResponse:
-    adapter = _get_adapter("paypal")
-    try:
-        result = adapter.capture_order(paypalOrderId)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return PayPalCaptureResponse(**result)
-
-
-@app.post("/stripe/sessions", response_model=StripeCreateSessionResponse)
-async def create_stripe_session(request: StripeCreateSessionRequest) -> StripeCreateSessionResponse:
-    adapter = _get_adapter("stripe")
-    try:
-        result = adapter.create_session(
-            request.referenceId,
-            Decimal(request.amount),
-            request.currency,
-            request.successUrl,
-            request.cancelUrl,
-            request.customerEmail,
-            [item.model_dump() for item in request.items] if request.items else None,
-        )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return StripeCreateSessionResponse(**result)
-
-
-@app.get("/stripe/sessions/{sessionId}", response_model=StripeSessionResponse)
-async def get_stripe_session(sessionId: str) -> StripeSessionResponse:
-    adapter = _get_adapter("stripe")
-    try:
-        result = adapter.retrieve_session(sessionId)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return StripeSessionResponse(**result)

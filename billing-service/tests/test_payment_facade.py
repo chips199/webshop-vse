@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from src.config import settings
 from src.payment import PaymentStatus, get_payment_facade
-from src.payment.adapters import AsyncWebhookStubAdapter, PaymentAdapter
+from src.payment.adapters import PaymentAdapter, PayPalAdapter
 from src.payment.models import PaymentResult
 
 
@@ -33,10 +33,14 @@ class PaymentFacadeTest(unittest.TestCase):
         self.assertEqual(result.provider, "stripe")
         self.assertEqual(result.status, PaymentStatus.SUCCEEDED)
 
-    def test_paypal_charge_succeeds(self) -> None:
-        result = get_payment_facade("paypal").charge("order-2", Decimal("49.90"), "EUR")
+    def test_paypal_charge_without_credentials_returns_pending_and_schedules_webhook(self) -> None:
+        # Ohne Sandbox-Credentials ist PayPal ein Stub, der Bonus 4.4 umsetzt:
+        # charge() liefert sofort PENDING, das Ergebnis kommt per Timer-Webhook nach.
+        with patch.object(PayPalAdapter, "_schedule_webhook") as schedule_webhook:
+            result = get_payment_facade("paypal").charge("order-2", Decimal("49.90"), "EUR")
         self.assertEqual(result.provider, "paypal")
-        self.assertEqual(result.status, PaymentStatus.SUCCEEDED)
+        self.assertEqual(result.status, PaymentStatus.PENDING)
+        schedule_webhook.assert_called_once()
 
     def test_stripe_charge_declined(self) -> None:
         result = get_payment_facade("stripe").charge(
@@ -105,9 +109,9 @@ class PaymentFacadeTest(unittest.TestCase):
         self.assertEqual(result.provider, "demo")
         self.assertEqual(result.status, PaymentStatus.SUCCEEDED)
 
-    def test_async_stub_charge_returns_pending_and_schedules_success_webhook(self) -> None:
-        with patch.object(AsyncWebhookStubAdapter, "_schedule_webhook") as schedule_webhook:
-            result = get_payment_facade("async-stub").charge(
+    def test_paypal_stub_charge_schedules_success_webhook(self) -> None:
+        with patch.object(PayPalAdapter, "_schedule_webhook") as schedule_webhook:
+            result = get_payment_facade("paypal").charge(
                 "order-8",
                 Decimal("49.90"),
                 "EUR",
@@ -117,18 +121,18 @@ class PaymentFacadeTest(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(result.provider, "async-stub")
+        self.assertEqual(result.provider, "paypal")
         self.assertEqual(result.status, PaymentStatus.PENDING)
         payload = schedule_webhook.call_args.args[0]
         self.assertEqual(payload["orderId"], "order-8")
-        self.assertEqual(payload["transactionId"], "async-stub-order-8")
+        self.assertEqual(payload["transactionId"], "paypal-order-8")
         self.assertEqual(payload["status"], "SUCCEEDED")
         self.assertEqual(payload["correlationId"], "corr-8")
         self.assertEqual(payload["previousEventId"], "event-7")
 
-    def test_async_stub_can_schedule_failure_webhook(self) -> None:
-        with patch.object(AsyncWebhookStubAdapter, "_schedule_webhook") as schedule_webhook:
-            result = get_payment_facade("async-stub").charge(
+    def test_paypal_stub_can_schedule_failure_webhook(self) -> None:
+        with patch.object(PayPalAdapter, "_schedule_webhook") as schedule_webhook:
+            result = get_payment_facade("paypal").charge(
                 "order-9",
                 Decimal("29.90"),
                 "EUR",

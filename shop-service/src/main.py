@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import secrets
 import threading
+from typing import Literal
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
@@ -30,6 +31,7 @@ from .database import get_order_by_idempotency_key
 from .database import init_database, update_order_status
 from .database import update_product as update_product_record
 from .database import update_invoice_created, update_payment_succeeded, update_warehouse_commit
+from .database import update_payment_action_required
 from .logging_config import configure_logging
 from .messaging import build_message, consume_messages, publish_message
 from .problem_details import register_problem_handlers
@@ -74,6 +76,12 @@ def handle_saga_message(message: dict) -> None:
 
     if message_type == "warehouse.reservation.failed":
         update_order_status(payload["orderId"], "OUT_OF_STOCK")
+        return
+
+    if message_type == "billing.payment.pending":
+        redirect_url = payload.get("redirectUrl")
+        if redirect_url:
+            update_payment_action_required(payload["orderId"], payload["transactionId"], redirect_url)
         return
 
     if message_type == "billing.payment.succeeded":
@@ -260,6 +268,7 @@ async def lifespan(app: FastAPI):
             [
                 "warehouse.reservation.succeeded",
                 "warehouse.reservation.failed",
+                "billing.payment.pending",
                 "billing.payment.succeeded",
                 "billing.payment.failed",
                 "billing.refund.succeeded",
@@ -335,10 +344,6 @@ class PaymentSelection(BaseModel):
     cardholder: str | None = None
     testPaymentMethod: str | None = None
     paypalEmail: str | None = None
-    paypalOrderId: str | None = None
-    paypalCaptureId: str | None = None
-    approveUrl: str | None = None
-    status: str | None = None
     webhookStatus: str | None = None
     webhookReasonCode: str | None = None
     webhookMessage: str | None = None
@@ -401,6 +406,12 @@ class OrderResponse(BaseModel):
     status: str
     amount: str | None = None
     currency: str | None = None
+    transactionId: str | None = None
+    paymentRedirectUrl: str | None = None
+
+
+class PaymentConfirmationRequest(BaseModel):
+    outcome: Literal["approved", "cancelled"]
 
 
 class AdminLoginRequest(BaseModel):
@@ -587,6 +598,47 @@ async def get_order(orderId: str) -> OrderResponse:
     return _order_response(order)
 
 
+@app.post("/orders/{orderId}/payment-confirmation", response_model=OrderResponse, status_code=status.HTTP_202_ACCEPTED)
+async def confirm_order_payment(orderId: str, confirmation: PaymentConfirmationRequest) -> OrderResponse:
+    order = get_order_record(orderId)
+    if not order:
+        raise HTTPException(status_code=404, detail=f"Order {orderId} not found")
+    if order["status"] != "PAYMENT_ACTION_REQUIRED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Order {orderId} is not awaiting a payment confirmation (status={order['status']}).",
+        )
+    correlation_id = str(order["correlationId"])
+
+    if confirmation.outcome == "cancelled":
+        update_order_status(orderId, "PAYMENT_FAILED")
+        cancel_requested = build_message(
+            "warehouse.cancel.requested",
+            correlation_id,
+            {
+                "orderId": orderId,
+                "reasonCode": "PAYMENT_CANCELLED",
+                "message": "Kunde hat die Zahlung abgebrochen, Warehouse-Reservierung wird storniert.",
+            },
+        )
+        publish_message("warehouse.cancel.requested", cancel_requested)
+    else:
+        confirm_requested = build_message(
+            "billing.payment.confirm.requested",
+            correlation_id,
+            {
+                "orderId": orderId,
+                "transactionId": order.get("transactionId"),
+                "provider": (order.get("payment") or {}).get("provider"),
+                "amount": str(order["amount"]),
+                "currency": order["currency"],
+            },
+        )
+        publish_message("billing.payment.confirm.requested", confirm_requested)
+
+    return _order_response(get_order_record(orderId))
+
+
 def _idempotency_key_from_request(request: Request) -> str | None:
     value = request.headers.get("Idempotency-Key")
     if value is None:
@@ -611,6 +663,8 @@ def _order_response(order: dict) -> OrderResponse:
         status=order["status"],
         amount=str(order["amount"]),
         currency=order["currency"],
+        transactionId=order.get("transactionId"),
+        paymentRedirectUrl=order.get("paymentRedirectUrl"),
     )
 
 

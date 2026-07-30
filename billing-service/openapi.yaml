@@ -46,85 +46,11 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
-  /paypal/orders:
-    post:
-      summary: Create PayPal checkout order
-      operationId: createPayPalOrder
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/PayPalCreateOrderRequest"
-      responses:
-        "200":
-          description: PayPal order created
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PayPalCreateOrderResponse"
-        "502":
-          description: Payment provider error
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/ProblemDetails"
-  /paypal/orders/{paypalOrderId}/capture:
-    post:
-      summary: Capture approved PayPal order
-      operationId: capturePayPalOrder
-      parameters:
-        - name: paypalOrderId
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: PayPal order captured
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PayPalCaptureResponse"
-  /stripe/sessions:
-    post:
-      summary: Create Stripe Checkout Session
-      operationId: createStripeSession
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/StripeCreateSessionRequest"
-      responses:
-        "200":
-          description: Stripe Checkout Session created
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/StripeCreateSessionResponse"
-  /stripe/sessions/{sessionId}:
-    get:
-      summary: Retrieve Stripe Checkout Session
-      operationId: getStripeSession
-      parameters:
-        - name: sessionId
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Stripe session status and collected checkout data
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/StripeSessionResponse"
   /webhooks/payment-stub:
     post:
       summary: Receive asynchronous payment stub confirmation
       operationId: receiveAsyncPaymentWebhook
-      description: Internal webhook endpoint used by the async-stub provider to continue the RabbitMQ saga after a delayed payment result.
+      description: Internal webhook endpoint used by the PayPal stub (no sandbox credentials configured) to continue the RabbitMQ saga after a delayed payment result.
       requestBody:
         required: true
         content:
@@ -164,128 +90,10 @@ components:
           type: string
         provider:
           type: string
-          enum: [paypal, stripe, async-stub]
+          enum: [paypal, stripe]
         status:
           type: string
           enum: [PENDING, SUCCEEDED, FAILED, REFUNDED]
-    PayPalCreateOrderRequest:
-      type: object
-      required: [referenceId, amount]
-      properties:
-        referenceId:
-          type: string
-        amount:
-          type: string
-        currency:
-          type: string
-          default: EUR
-        returnUrl:
-          type: string
-          nullable: true
-        cancelUrl:
-          type: string
-          nullable: true
-    PayPalCreateOrderResponse:
-      type: object
-      required: [orderId, status]
-      properties:
-        orderId:
-          type: string
-        status:
-          type: string
-        approveUrl:
-          type: string
-          nullable: true
-        stub:
-          type: boolean
-    PayPalCaptureResponse:
-      type: object
-      required: [orderId, captureId, status]
-      properties:
-        orderId:
-          type: string
-        captureId:
-          type: string
-        status:
-          type: string
-        payer:
-          type: object
-          nullable: true
-        shippingAddress:
-          type: object
-          nullable: true
-        stub:
-          type: boolean
-    StripeCheckoutItem:
-      type: object
-      required: [name, amount]
-      properties:
-        name:
-          type: string
-        amount:
-          type: string
-        quantity:
-          type: integer
-          default: 1
-    StripeCreateSessionRequest:
-      type: object
-      required: [referenceId, amount]
-      properties:
-        referenceId:
-          type: string
-        amount:
-          type: string
-        currency:
-          type: string
-          default: EUR
-        successUrl:
-          type: string
-          nullable: true
-        cancelUrl:
-          type: string
-          nullable: true
-        customerEmail:
-          type: string
-          nullable: true
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/StripeCheckoutItem"
-    StripeCreateSessionResponse:
-      type: object
-      required: [sessionId, status, paymentStatus]
-      properties:
-        sessionId:
-          type: string
-        status:
-          type: string
-        paymentStatus:
-          type: string
-        checkoutUrl:
-          type: string
-          nullable: true
-        stub:
-          type: boolean
-    StripeSessionResponse:
-      type: object
-      required: [sessionId]
-      properties:
-        sessionId:
-          type: string
-        status:
-          type: string
-          nullable: true
-        paymentStatus:
-          type: string
-          nullable: true
-        customer:
-          type: object
-          nullable: true
-        shippingAddress:
-          type: object
-          nullable: true
-        stub:
-          type: boolean
     AsyncPaymentWebhookRequest:
       type: object
       required: [orderId, transactionId, provider, amount, currency, status, correlationId]
@@ -296,7 +104,7 @@ components:
           type: string
         provider:
           type: string
-          default: async-stub
+          default: paypal
         amount:
           type: string
           example: "49.90"

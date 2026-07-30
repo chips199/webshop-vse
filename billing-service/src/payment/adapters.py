@@ -40,6 +40,14 @@ class PaymentAdapter:
 
 
 class StripeAdapter(PaymentAdapter):
+    """Stripe ist mit Sandbox-Credentials ebenfalls asynchron per Redirect.
+
+    charge() legt eine echte Stripe Checkout Session an und liefert PENDING
+    mit redirect_url zur echten Sandbox-Zahlungsseite. Ohne Credentials bleibt
+    Stripe der einfache, sofort erfolgreiche lokale Stub (Bonus 4.4 wird
+    ausschliesslich ueber PayPal abgedeckt, siehe PayPalAdapter).
+    """
+
     provider_name = "stripe"
 
     def charge(
@@ -54,15 +62,23 @@ class StripeAdapter(PaymentAdapter):
         simulated = _simulated_result(self.provider_name, order_id, payment_metadata)
         if simulated:
             return simulated
-        if payment_metadata.get("stripeSessionId"):
-            return PaymentResult(
-                transaction_id=payment_metadata["stripeSessionId"],
-                provider=self.provider_name,
-                status=PaymentStatus.SUCCEEDED,
-                reason=f"Stripe checkout session {payment_metadata.get('stripeSessionStatus')} paid",
-            )
         if settings.stripe_secret_key:
-            return self._charge_with_stripe(order_id, amount, currency, payment_method)
+            base_url = settings.shop_frontend_base_url.rstrip("/")
+            session = self.create_session(
+                order_id,
+                amount,
+                currency,
+                success_url=f"{base_url}/checkout?stripe=approved&orderId={order_id}",
+                cancel_url=f"{base_url}/checkout?stripe=cancelled&orderId={order_id}",
+                customer_email=payment_metadata.get("customerEmail"),
+            )
+            return PaymentResult(
+                transaction_id=session["sessionId"],
+                provider=self.provider_name,
+                status=PaymentStatus.PENDING,
+                reason="Awaiting Stripe checkout completion",
+                redirect_url=session.get("checkoutUrl"),
+            )
         return PaymentResult(
             transaction_id=f"stripe-{order_id}",
             provider=self.provider_name,
@@ -85,6 +101,29 @@ class StripeAdapter(PaymentAdapter):
         )
 
     def get_status(self, transaction_id: str) -> PaymentResult:
+        if settings.stripe_secret_key and not transaction_id.startswith("stripe-"):
+            try:
+                session = self.retrieve_session(transaction_id)
+            except RuntimeError as exc:
+                return PaymentResult(
+                    transaction_id=transaction_id,
+                    provider=self.provider_name,
+                    status=PaymentStatus.FAILED,
+                    reason=str(exc),
+                )
+            if session.get("paymentStatus") == "paid":
+                return PaymentResult(
+                    transaction_id=transaction_id,
+                    provider=self.provider_name,
+                    status=PaymentStatus.SUCCEEDED,
+                    reason=f"Stripe session {transaction_id} paid",
+                )
+            return PaymentResult(
+                transaction_id=transaction_id,
+                provider=self.provider_name,
+                status=PaymentStatus.FAILED,
+                reason=f"Stripe session {transaction_id} not paid (status={session.get('paymentStatus')})",
+            )
         return PaymentResult(
             transaction_id=transaction_id,
             provider=self.provider_name,
@@ -101,15 +140,6 @@ class StripeAdapter(PaymentAdapter):
         customer_email: str | None = None,
         items: list[dict] | None = None,
     ) -> dict:
-        if not settings.stripe_secret_key:
-            return {
-                "sessionId": f"stripe-stub-{reference_id}",
-                "status": "complete",
-                "paymentStatus": "paid",
-                "checkoutUrl": success_url or "http://localhost:3000/checkout?stripe=approved",
-                "stub": True,
-            }
-
         data = {
             "mode": "payment",
             "success_url": success_url or "http://localhost:3000/checkout?stripe=approved&session_id={CHECKOUT_SESSION_ID}",
@@ -149,26 +179,6 @@ class StripeAdapter(PaymentAdapter):
         }
 
     def retrieve_session(self, session_id: str) -> dict:
-        if session_id.startswith("stripe-stub-"):
-            return {
-                "sessionId": session_id,
-                "status": "complete",
-                "paymentStatus": "paid",
-                "customer": {
-                    "firstName": "Ada",
-                    "lastName": "Lovelace",
-                    "email": "ada.lovelace@example.test",
-                },
-                "shippingAddress": {
-                    "street": "Retroallee",
-                    "houseNumber": "8",
-                    "postalCode": "10115",
-                    "city": "Berlin",
-                    "country": "DE",
-                },
-                "stub": True,
-            }
-
         body = self._request(f"https://api.stripe.com/v1/checkout/sessions/{session_id}", {}, method="GET")
         return {
             "sessionId": body["id"],
@@ -178,40 +188,6 @@ class StripeAdapter(PaymentAdapter):
             "shippingAddress": _normalize_stripe_shipping(_stripe_shipping_details(body)),
             "stub": False,
         }
-
-    def _charge_with_stripe(
-        self,
-        order_id: str,
-        amount: Decimal,
-        currency: str,
-        payment_method: str | None = None,
-    ) -> PaymentResult:
-        response = self._request(
-            "https://api.stripe.com/v1/payment_intents",
-            {
-                "amount": _minor_units(amount),
-                "currency": currency.lower(),
-                "payment_method": payment_method or settings.stripe_payment_method,
-                "confirm": "true",
-                "automatic_payment_methods[enabled]": "true",
-                "automatic_payment_methods[allow_redirects]": "never",
-                "description": f"Historical computer parts order {order_id}",
-                "metadata[orderId]": order_id,
-            },
-        )
-        status = response.get("status")
-        if status in {"succeeded", "processing", "requires_capture"}:
-            return PaymentResult(
-                transaction_id=response["id"],
-                provider=self.provider_name,
-                status=PaymentStatus.SUCCEEDED,
-            )
-        return PaymentResult(
-            transaction_id=response.get("id", f"stripe-{order_id}"),
-            provider=self.provider_name,
-            status=PaymentStatus.FAILED,
-            reason=f"Stripe PaymentIntent status {status}",
-        )
 
     def _request(self, url: str, data: dict, method: str = "POST") -> dict:
         encoded_data = urlencode(data).encode("utf-8") if method != "GET" else None
@@ -232,6 +208,18 @@ class StripeAdapter(PaymentAdapter):
 
 
 class PayPalAdapter(PaymentAdapter):
+    """PayPal ist immer asynchron: charge() liefert nie sofort ein Endergebnis.
+
+    Mit Sandbox-Credentials wird eine echte PayPal-Order angelegt und der
+    Kaeufer per redirect_url zur echten Sandbox-Freigabeseite geschickt; das
+    Ergebnis kommt erst zurueck, wenn der Aufrufer nach der Rueckleitung
+    get_status() (= Capture) aufruft. Ohne Credentials simuliert der Stub
+    denselben Ablauf: charge() liefert PENDING, nach einer konfigurierbaren
+    Verzoegerung schickt der Stub sich selbst einen Webhook-Request, der das
+    Ergebnis auf herkoemmlichem Weg (POST /webhooks/payment-stub) auftreten
+    laesst (Bonus 4.4 aus der Aufgabenstellung).
+    """
+
     provider_name = "paypal"
 
     def charge(
@@ -246,19 +234,45 @@ class PayPalAdapter(PaymentAdapter):
         simulated = _simulated_result(self.provider_name, order_id, payment_metadata)
         if simulated:
             return simulated
-        if payment_metadata.get("paypalCaptureId"):
-            return PaymentResult(
-                transaction_id=payment_metadata["paypalCaptureId"],
-                provider=self.provider_name,
-                status=PaymentStatus.SUCCEEDED,
-                reason=f"PayPal sandbox order {payment_metadata.get('paypalOrderId')} captured",
-            )
         if settings.paypal_client_id and settings.paypal_client_secret:
-            return self._create_paypal_order(order_id, amount, currency)
+            base_url = settings.shop_frontend_base_url.rstrip("/")
+            order = self.create_order(
+                order_id,
+                amount,
+                currency,
+                return_url=f"{base_url}/checkout?paypal=approved&orderId={order_id}",
+                cancel_url=f"{base_url}/checkout?paypal=cancelled&orderId={order_id}",
+            )
+            return PaymentResult(
+                transaction_id=order["orderId"],
+                provider=self.provider_name,
+                status=PaymentStatus.PENDING,
+                reason="Awaiting PayPal buyer approval",
+                redirect_url=order.get("approveUrl"),
+            )
+        transaction_id = f"paypal-{order_id}"
+        webhook_status = str(payment_metadata.get("webhookStatus", "SUCCEEDED")).upper()
+        if webhook_status not in {"SUCCEEDED", "FAILED"}:
+            webhook_status = "SUCCEEDED"
+        self._schedule_webhook(
+            {
+                "orderId": order_id,
+                "transactionId": transaction_id,
+                "provider": self.provider_name,
+                "amount": f"{amount:.2f}",
+                "currency": currency,
+                "status": webhook_status,
+                "correlationId": payment_metadata.get("correlationId"),
+                "previousEventId": payment_metadata.get("previousEventId"),
+                "reasonCode": payment_metadata.get("webhookReasonCode") or "PAYMENT_DECLINED",
+                "message": payment_metadata.get("webhookMessage") or "PayPal stub webhook completed.",
+            }
+        )
         return PaymentResult(
-            transaction_id=f"paypal-{order_id}",
+            transaction_id=transaction_id,
             provider=self.provider_name,
-            status=PaymentStatus.SUCCEEDED,
+            status=PaymentStatus.PENDING,
+            reason="Webhook confirmation pending",
         )
 
     def refund(self, transaction_id: str, amount: Decimal) -> PaymentResult:
@@ -269,6 +283,29 @@ class PayPalAdapter(PaymentAdapter):
         )
 
     def get_status(self, transaction_id: str) -> PaymentResult:
+        if settings.paypal_client_id and settings.paypal_client_secret and not transaction_id.startswith("paypal-"):
+            try:
+                captured = self.capture_order(transaction_id)
+            except RuntimeError as exc:
+                return PaymentResult(
+                    transaction_id=transaction_id,
+                    provider=self.provider_name,
+                    status=PaymentStatus.FAILED,
+                    reason=str(exc),
+                )
+            if captured.get("status") == "COMPLETED":
+                return PaymentResult(
+                    transaction_id=captured.get("captureId", transaction_id),
+                    provider=self.provider_name,
+                    status=PaymentStatus.SUCCEEDED,
+                    reason=f"PayPal order {transaction_id} captured",
+                )
+            return PaymentResult(
+                transaction_id=transaction_id,
+                provider=self.provider_name,
+                status=PaymentStatus.FAILED,
+                reason=f"PayPal order {transaction_id} not completed (status={captured.get('status')})",
+            )
         return PaymentResult(
             transaction_id=transaction_id,
             provider=self.provider_name,
@@ -283,13 +320,6 @@ class PayPalAdapter(PaymentAdapter):
         return_url: str | None = None,
         cancel_url: str | None = None,
     ) -> dict:
-        if not settings.paypal_client_id or not settings.paypal_client_secret:
-            return {
-                "orderId": f"paypal-stub-{reference_id}",
-                "status": "CREATED",
-                "approveUrl": None,
-                "stub": True,
-            }
         body = self._paypal_json_request(
             "/v2/checkout/orders",
             {
@@ -324,25 +354,6 @@ class PayPalAdapter(PaymentAdapter):
         }
 
     def capture_order(self, paypal_order_id: str) -> dict:
-        if paypal_order_id.startswith("paypal-stub-"):
-            return {
-                "orderId": paypal_order_id,
-                "captureId": f"capture-{paypal_order_id}",
-                "status": "COMPLETED",
-                "payer": {
-                    "firstName": "Ada",
-                    "lastName": "Lovelace",
-                    "email": "buyer@example.test",
-                },
-                "shippingAddress": {
-                    "street": "Retroallee",
-                    "houseNumber": "8",
-                    "postalCode": "10115",
-                    "city": "Berlin",
-                    "country": "DE",
-                },
-                "stub": True,
-            }
         body = self._paypal_json_request(f"/v2/checkout/orders/{paypal_order_id}/capture", {})
         capture_id = None
         shipping_address = None
@@ -361,21 +372,24 @@ class PayPalAdapter(PaymentAdapter):
             "stub": False,
         }
 
-    def _create_paypal_order(self, order_id: str, amount: Decimal, currency: str) -> PaymentResult:
-        body = self.create_order(order_id, amount, currency)
-        if body.get("orderId"):
-            return PaymentResult(
-                transaction_id=body["orderId"],
-                provider=self.provider_name,
-                status=PaymentStatus.SUCCEEDED,
-                reason=f"PayPal sandbox order status {body.get('status')}",
-            )
-        return PaymentResult(
-            transaction_id=f"paypal-{order_id}",
-            provider=self.provider_name,
-            status=PaymentStatus.FAILED,
-            reason="PayPal sandbox did not return an order id",
+    def _schedule_webhook(self, payload: dict) -> None:
+        delay = max(settings.async_payment_webhook_delay_seconds, 0.0)
+        timer = threading.Timer(delay, self._send_webhook, args=(payload,))
+        timer.daemon = True
+        timer.start()
+
+    def _send_webhook(self, payload: dict) -> None:
+        request = Request(
+            settings.async_payment_webhook_url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
         )
+        try:
+            with urlopen(request, timeout=10):
+                return
+        except (HTTPError, URLError) as exc:
+            logger.warning("PayPal stub webhook failed: %s", exc)
 
     def _paypal_json_request(self, path: str, payload: dict) -> dict:
         access_token = self._access_token()
@@ -412,76 +426,6 @@ class PayPalAdapter(PaymentAdapter):
         except (HTTPError, URLError) as exc:
             raise RuntimeError(f"PayPal sandbox auth failed: {exc}") from exc
         return body["access_token"]
-
-
-class AsyncWebhookStubAdapter(PaymentAdapter):
-    provider_name = "async-stub"
-
-    def charge(
-        self,
-        order_id: str,
-        amount: Decimal,
-        currency: str,
-        payment_method: str | None = None,
-        payment_metadata: dict | None = None,
-    ) -> PaymentResult:
-        payment_metadata = payment_metadata or {}
-        transaction_id = f"async-stub-{order_id}"
-        webhook_status = str(payment_metadata.get("webhookStatus", "SUCCEEDED")).upper()
-        if webhook_status not in {"SUCCEEDED", "FAILED"}:
-            webhook_status = "SUCCEEDED"
-        webhook_payload = {
-            "orderId": order_id,
-            "transactionId": transaction_id,
-            "provider": self.provider_name,
-            "amount": f"{amount:.2f}",
-            "currency": currency,
-            "status": webhook_status,
-            "correlationId": payment_metadata.get("correlationId"),
-            "previousEventId": payment_metadata.get("previousEventId"),
-            "reasonCode": payment_metadata.get("webhookReasonCode") or "PAYMENT_DECLINED",
-            "message": payment_metadata.get("webhookMessage") or "Async payment stub completed.",
-        }
-        self._schedule_webhook(webhook_payload)
-        return PaymentResult(
-            transaction_id=transaction_id,
-            provider=self.provider_name,
-            status=PaymentStatus.PENDING,
-            reason="Webhook confirmation pending",
-        )
-
-    def refund(self, transaction_id: str, amount: Decimal) -> PaymentResult:
-        return PaymentResult(
-            transaction_id=transaction_id,
-            provider=self.provider_name,
-            status=PaymentStatus.REFUNDED,
-        )
-
-    def get_status(self, transaction_id: str) -> PaymentResult:
-        return PaymentResult(
-            transaction_id=transaction_id,
-            provider=self.provider_name,
-            status=PaymentStatus.PENDING,
-        )
-
-    def _schedule_webhook(self, payload: dict) -> None:
-        delay = max(settings.async_payment_webhook_delay_seconds, 0.0)
-        timer = threading.Timer(delay, self._send_webhook, args=(payload,))
-        timer.daemon = True
-        timer.start()
-
-    def _send_webhook(self, payload: dict) -> None:
-        request = Request(
-            settings.async_payment_webhook_url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urlopen(request, timeout=10):
-                return
-        except (HTTPError, URLError) as exc:
-            logger.warning("Async payment stub webhook failed: %s", exc)
 
 
 def _minor_units(amount: Decimal) -> int:

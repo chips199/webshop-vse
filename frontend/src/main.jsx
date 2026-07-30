@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
@@ -28,8 +28,8 @@ import {
 import "./styles.css";
 
 const SHOP_API = import.meta.env.VITE_SHOP_API_URL || "http://localhost:8000";
-const BILLING_API = import.meta.env.VITE_BILLING_API_URL || "http://localhost:8002";
 const CART_STORAGE_KEY = "retro-parts-cart";
+const PENDING_CHECKOUT_KEY = "retro-parts-pending-checkout";
 
 const emptyCustomer = {
   firstName: "Ada",
@@ -50,16 +50,9 @@ const emptyPaymentDetails = {
   stripe: {
     cardholder: "Ada Lovelace",
     testPaymentMethod: "pm_card_visa",
-    stripeSessionId: "",
-    stripeSessionStatus: "",
-    stripePaymentStatus: "",
   },
   paypal: {
     paypalEmail: "buyer@example.test",
-    paypalOrderId: "",
-    paypalCaptureId: "",
-    approveUrl: "",
-    status: "",
   },
 };
 
@@ -78,7 +71,7 @@ function formatDateTime(value) {
 function statusTone(status = "") {
   if (["COMPLETED"].includes(status)) return "success";
   if (["PAYMENT_FAILED", "OUT_OF_STOCK", "REFUND_FAILED", "ROLLBACK_COMPLETED"].includes(status)) return "danger";
-  if (["INVOICE_RETRY_PENDING", "REFUND_PENDING"].includes(status)) return "warning";
+  if (["INVOICE_RETRY_PENDING", "REFUND_PENDING", "PAYMENT_ACTION_REQUIRED"].includes(status)) return "warning";
   return "pending";
 }
 
@@ -119,13 +112,19 @@ function sleep(milliseconds) {
 
 async function waitForOrderStatus(orderId) {
   let latest = null;
-  const finalStatuses = new Set(["COMPLETED", "PAYMENT_FAILED", "OUT_OF_STOCK", "ROLLBACK_COMPLETED"]);
+  const stopStatuses = new Set([
+    "COMPLETED",
+    "PAYMENT_FAILED",
+    "OUT_OF_STOCK",
+    "ROLLBACK_COMPLETED",
+    "PAYMENT_ACTION_REQUIRED",
+  ]);
   for (let attempt = 0; attempt < 12; attempt += 1) {
     await sleep(500);
     const response = await fetch(`${SHOP_API}/orders/${orderId}`);
     if (!response.ok) continue;
     latest = await response.json();
-    if (finalStatuses.has(latest.status)) break;
+    if (stopStatuses.has(latest.status)) break;
   }
   return latest;
 }
@@ -138,41 +137,19 @@ function loadStoredCart() {
   }
 }
 
-function mapPayPalCustomer(payer = {}) {
+function buildOrderConfirmation(confirmedOrder, { customer, shippingAddress, items, provider, total }) {
   return {
-    firstName: payer.firstName || "PayPal",
-    lastName: payer.lastName || "Kunde",
-    email: payer.email || "paypal-buyer@example.test",
-    phone: "",
-  };
-}
-
-function mapPayPalShippingAddress(address = {}) {
-  return {
-    street: address.street || "PayPal-Adresse",
-    houseNumber: address.houseNumber || "-",
-    postalCode: address.postalCode || "-",
-    city: address.city || "-",
-    country: address.country || "-",
-  };
-}
-
-function mapStripeCustomer(customer = {}) {
-  return {
-    firstName: customer.firstName || "Stripe",
-    lastName: customer.lastName || "Kunde",
-    email: customer.email || "stripe-buyer@example.test",
-    phone: customer.phone || "",
-  };
-}
-
-function mapStripeShippingAddress(address = {}) {
-  return {
-    street: address.street || "Stripe-Adresse",
-    houseNumber: address.houseNumber || "-",
-    postalCode: address.postalCode || "-",
-    city: address.city || "-",
-    country: address.country || "-",
+    order: confirmedOrder,
+    customer,
+    shippingAddress,
+    items,
+    payment: {
+      provider,
+      mode: "sandbox",
+      status: confirmedOrder.status,
+      transactionId: confirmedOrder.transactionId,
+    },
+    total,
   };
 }
 
@@ -188,8 +165,6 @@ function App() {
   const [orderConfirmation, setOrderConfirmation] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const paypalReturnHandled = useRef("");
-  const stripeReturnHandled = useRef("");
 
   const loadProducts = useCallback(async () => {
     const response = await fetch(`${SHOP_API}/products`, { cache: "no-store" });
@@ -287,11 +262,7 @@ function App() {
     });
   }
 
-  async function createShopOrder({ customerOverride, shippingAddressOverride, paymentOverride, providerOverride } = {}) {
-    const selectedProvider = providerOverride || provider;
-    const selectedPayment = paymentOverride || paymentDetails;
-    const selectedCustomer = customerOverride || customer;
-    const selectedShippingAddress = shippingAddressOverride || shippingAddress;
+  async function createShopOrder() {
     const selectedItems = cartItems.map((item) => ({ ...item }));
     setBusy(true);
     setError("");
@@ -304,14 +275,14 @@ function App() {
           "X-Correlation-Id": crypto.randomUUID(),
         },
         body: JSON.stringify({
-          customer: selectedCustomer,
-          shippingAddress: selectedShippingAddress,
+          customer,
+          shippingAddress,
           items: selectedItems.map((item) => ({ productId: item.id, quantity: item.quantity })),
           payment: {
-            provider: selectedProvider,
+            provider,
             currency: "EUR",
             mode: "sandbox",
-            ...(selectedProvider === "stripe" ? selectedPayment.stripe : selectedPayment.paypal),
+            ...(provider === "stripe" ? paymentDetails.stripe : paymentDetails.paypal),
           },
         }),
       });
@@ -319,22 +290,23 @@ function App() {
         throw new Error(`Bestellung fehlgeschlagen: HTTP ${response.status}`);
       }
       const created = await response.json();
+      // Order kommt PENDING zurueck; shop-service prueft erst Lager, bevor es Zahlung beauftragt.
       const confirmedOrder = (await waitForOrderStatus(created.orderId)) || created;
+
+      if (confirmedOrder.status === "PAYMENT_ACTION_REQUIRED" && confirmedOrder.paymentRedirectUrl) {
+        sessionStorage.setItem(
+          PENDING_CHECKOUT_KEY,
+          JSON.stringify({ orderId: confirmedOrder.orderId, customer, shippingAddress, items: selectedItems, provider, total }),
+        );
+        window.location.assign(confirmedOrder.paymentRedirectUrl);
+        return;
+      }
+
       await loadProducts();
       setOrder(confirmedOrder);
-      setOrderConfirmation({
-        order: confirmedOrder,
-        customer: selectedCustomer,
-        shippingAddress: selectedShippingAddress,
-        items: selectedItems,
-        payment: {
-          provider: selectedProvider,
-          mode: "sandbox",
-          status: selectedProvider === "paypal" ? selectedPayment.paypal.status || "COMPLETED" : selectedPayment.stripe.stripePaymentStatus || "paid",
-          transactionId: selectedProvider === "paypal" ? selectedPayment.paypal.paypalCaptureId : selectedPayment.stripe.stripeSessionId,
-        },
-        total,
-      });
+      setOrderConfirmation(
+        buildOrderConfirmation(confirmedOrder, { customer, shippingAddress, items: selectedItems, provider, total }),
+      );
       setCart({});
       window.history.replaceState({}, "", "/confirmation");
       setPath("/confirmation");
@@ -348,208 +320,52 @@ function App() {
   async function submitOrder(event) {
     event.preventDefault();
     if (cartItems.length === 0) return;
-    if (provider === "paypal" && !paymentDetails.paypal.paypalCaptureId) {
-      await startPayPalCheckout();
-      return;
-    }
-    if (provider === "stripe" && !paymentDetails.stripe.stripeSessionId) {
-      await startStripeCheckout();
-      return;
-    }
     await createShopOrder();
   }
 
-  async function startStripeCheckout() {
-    if (cartItems.length === 0 || total <= 0) return;
+  async function resumePaymentReturn(orderId, approved, pending) {
     setBusy(true);
     setError("");
     try {
-      const response = await fetch(`${BILLING_API}/stripe/sessions`, {
+      await fetch(`${SHOP_API}/orders/${orderId}/payment-confirmation`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          referenceId: crypto.randomUUID(),
-          amount: total.toFixed(2),
-          currency: "EUR",
-          successUrl: `${window.location.origin}/checkout?stripe=approved&session_id={CHECKOUT_SESSION_ID}`,
-          cancelUrl: `${window.location.origin}/checkout?stripe=cancelled`,
-          customerEmail: customer.email,
-          items: cartItems.map((item) => ({
-            name: item.name,
-            amount: item.price,
-            quantity: item.quantity,
-          })),
-        }),
+        headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() },
+        body: JSON.stringify({ outcome: approved ? "approved" : "cancelled" }),
       });
-      if (!response.ok) {
-        throw new Error(`Stripe Checkout Session konnte nicht erstellt werden: HTTP ${response.status}`);
-      }
-      const created = await response.json();
-      setPaymentDetails({
-        ...paymentDetails,
-        stripe: {
-          ...paymentDetails.stripe,
-          stripeSessionId: created.sessionId,
-          stripeSessionStatus: created.status,
-          stripePaymentStatus: created.paymentStatus,
-        },
-      });
-      if (created.checkoutUrl) {
-        window.location.assign(created.checkoutUrl);
+      if (!approved) {
+        setError(`${pending.provider === "paypal" ? "PayPal" : "Stripe"}-Zahlung wurde abgebrochen.`);
         return;
       }
-      await verifyStripeAndCreateOrder(created.sessionId);
+      const confirmedOrder = await waitForOrderStatus(orderId);
+      if (!confirmedOrder) {
+        throw new Error("Bestellstatus konnte nicht ermittelt werden.");
+      }
+      await loadProducts();
+      setOrder(confirmedOrder);
+      setOrderConfirmation(buildOrderConfirmation(confirmedOrder, pending));
+      setCart({});
+      window.history.replaceState({}, "", "/confirmation");
+      setPath("/confirmation");
     } catch (caught) {
       setError(caught.message);
+    } finally {
       setBusy(false);
     }
-  }
-
-  async function verifyStripeAndCreateOrder(sessionId) {
-    setProvider("stripe");
-    setBusy(true);
-    setError("");
-    const response = await fetch(`${BILLING_API}/stripe/sessions/${sessionId}`);
-    if (!response.ok) {
-      throw new Error(`Stripe Checkout Session konnte nicht geprueft werden: HTTP ${response.status}`);
-    }
-    const session = await response.json();
-    if (session.paymentStatus !== "paid") {
-      throw new Error(`Stripe-Zahlung ist nicht bezahlt: ${session.paymentStatus || "unknown"}`);
-    }
-    const stripeCustomer = mapStripeCustomer(session.customer);
-    const stripeShippingAddress = mapStripeShippingAddress(session.shippingAddress);
-    const nextPaymentDetails = {
-      ...paymentDetails,
-      stripe: {
-        ...paymentDetails.stripe,
-        cardholder: `${stripeCustomer.firstName} ${stripeCustomer.lastName}`.trim(),
-        stripeSessionId: session.sessionId,
-        stripeSessionStatus: session.status,
-        stripePaymentStatus: session.paymentStatus,
-      },
-    };
-    setCustomer(stripeCustomer);
-    setShippingAddress(stripeShippingAddress);
-    setPaymentDetails(nextPaymentDetails);
-    await createShopOrder({
-      customerOverride: stripeCustomer,
-      shippingAddressOverride: stripeShippingAddress,
-      paymentOverride: nextPaymentDetails,
-      providerOverride: "stripe",
-    });
-  }
-
-  async function startPayPalCheckout() {
-    if (cartItems.length === 0 || total <= 0) return;
-    setBusy(true);
-    setError("");
-    try {
-      const response = await fetch(`${BILLING_API}/paypal/orders`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          referenceId: crypto.randomUUID(),
-          amount: total.toFixed(2),
-          currency: "EUR",
-          returnUrl: `${window.location.origin}/checkout?paypal=approved`,
-          cancelUrl: `${window.location.origin}/checkout?paypal=cancelled`,
-        }),
-      });
-      if (!response.ok) {
-        throw new Error(`PayPal-Zahlung konnte nicht gestartet werden: HTTP ${response.status}`);
-      }
-      const created = await response.json();
-      setPaymentDetails({
-        ...paymentDetails,
-        paypal: {
-          ...paymentDetails.paypal,
-          paypalOrderId: created.orderId,
-          approveUrl: created.approveUrl || "",
-          status: created.status,
-          paypalCaptureId: "",
-        },
-      });
-      if (created.approveUrl) {
-        window.location.assign(created.approveUrl);
-        return;
-      }
-      await capturePayPalAndCreateOrder(created.orderId);
-    } catch (caught) {
-      setError(caught.message);
-      setBusy(false);
-    }
-  }
-
-  async function capturePayPalAndCreateOrder(paypalOrderId) {
-    setProvider("paypal");
-    setBusy(true);
-    setError("");
-    const response = await fetch(`${BILLING_API}/paypal/orders/${paypalOrderId}/capture`, { method: "POST" });
-    if (!response.ok) {
-      throw new Error(`PayPal-Zahlung konnte nicht bestaetigt werden: HTTP ${response.status}`);
-    }
-    const captured = await response.json();
-    const paypalCustomer = mapPayPalCustomer(captured.payer);
-    const paypalShippingAddress = mapPayPalShippingAddress(captured.shippingAddress);
-    const nextPaymentDetails = {
-      ...paymentDetails,
-      paypal: {
-        ...paymentDetails.paypal,
-        paypalEmail: paypalCustomer.email,
-        paypalOrderId: captured.orderId,
-        paypalCaptureId: captured.captureId,
-        status: captured.status,
-      },
-    };
-    setCustomer(paypalCustomer);
-    setShippingAddress(paypalShippingAddress);
-    setPaymentDetails(nextPaymentDetails);
-    await createShopOrder({
-      customerOverride: paypalCustomer,
-      shippingAddressOverride: paypalShippingAddress,
-      paymentOverride: nextPaymentDetails,
-      providerOverride: "paypal",
-    });
   }
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const paypalState = params.get("paypal");
-    const paypalOrderId = params.get("token");
-    if (path === "/checkout" && paypalState === "cancelled") {
-      setError("PayPal-Zahlung wurde abgebrochen.");
-      window.history.replaceState({}, "", "/checkout");
-      return;
-    }
-    if (path !== "/checkout" || paypalState !== "approved" || !paypalOrderId || cartItems.length === 0) return;
-    if (paypalReturnHandled.current === paypalOrderId) return;
-    paypalReturnHandled.current = paypalOrderId;
-
-    capturePayPalAndCreateOrder(paypalOrderId).catch((caught) => {
-      setError(caught.message);
-      setBusy(false);
-    });
-  }, [path, cartItems.length]);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const stripeState = params.get("stripe");
-    const sessionId = params.get("session_id");
-    if (path === "/checkout" && stripeState === "cancelled") {
-      setError("Stripe-Zahlung wurde abgebrochen.");
-      window.history.replaceState({}, "", "/checkout");
-      return;
-    }
-    if (path !== "/checkout" || stripeState !== "approved" || !sessionId || cartItems.length === 0) return;
-    if (stripeReturnHandled.current === sessionId) return;
-    stripeReturnHandled.current = sessionId;
-
-    verifyStripeAndCreateOrder(sessionId).catch((caught) => {
-      setError(caught.message);
-      setBusy(false);
-    });
-  }, [path, cartItems.length]);
+    const returnProvider = params.has("paypal") ? "paypal" : params.has("stripe") ? "stripe" : null;
+    const returnState = returnProvider && params.get(returnProvider);
+    const orderId = params.get("orderId");
+    if (path !== "/checkout" || !returnProvider || !orderId) return;
+    const stored = sessionStorage.getItem(PENDING_CHECKOUT_KEY);
+    const pending = stored ? JSON.parse(stored) : null;
+    if (!pending || pending.orderId !== orderId) return;
+    sessionStorage.removeItem(PENDING_CHECKOUT_KEY);
+    window.history.replaceState({}, "", "/checkout");
+    resumePaymentReturn(orderId, returnState === "approved", pending);
+  }, [path]);
 
   return (
     <main className="terminal-shell">
@@ -573,8 +389,6 @@ function App() {
           provider={provider}
           setProvider={setProvider}
           submitOrder={submitOrder}
-          startPayPalCheckout={startPayPalCheckout}
-          startStripeCheckout={startStripeCheckout}
           total={total}
           busy={busy}
         />
@@ -937,8 +751,6 @@ function CheckoutPage({
   order,
   provider,
   setProvider,
-  startPayPalCheckout,
-  startStripeCheckout,
   submitOrder,
   total,
 }) {
@@ -962,12 +774,7 @@ function CheckoutPage({
               PayPal
             </button>
           </div>
-          <PaymentFields
-            provider={provider}
-            startPayPalCheckout={startPayPalCheckout}
-            startStripeCheckout={startStripeCheckout}
-            total={total}
-          />
+          <PaymentFields provider={provider} />
         </section>
 
         <aside className="checkout-summary">
@@ -1025,6 +832,7 @@ function OrderConfirmationPage({ confirmation }) {
   }
 
   const { customer, items, order, payment, shippingAddress, total } = confirmation;
+  const succeeded = payment.status === "COMPLETED";
 
   return (
     <section className="confirmation-page">
@@ -1034,7 +842,11 @@ function OrderConfirmationPage({ confirmation }) {
             <ReceiptText size={22} />
             <h2>Bestellung bestaetigt</h2>
           </div>
-          <p className="success">Zahlung erfolgreich. Deine Bestellung wurde angelegt.</p>
+          <p className={succeeded ? "success" : "muted"}>
+            {succeeded
+              ? "Zahlung erfolgreich. Deine Bestellung wurde angelegt."
+              : `Bestellung wird verarbeitet. Aktueller Status: ${payment.status}.`}
+          </p>
         </div>
 
         <div className="confirmation-grid">
@@ -1044,7 +856,7 @@ function OrderConfirmationPage({ confirmation }) {
           </div>
           <div className="confirmation-block">
             <span>Status</span>
-            <strong>Bezahlt</strong>
+            <strong>{payment.status}</strong>
           </div>
           <div className="confirmation-block">
             <span>Zahlung</span>
@@ -1098,7 +910,7 @@ function OrderConfirmationPage({ confirmation }) {
   );
 }
 
-function PaymentFields({ provider, startPayPalCheckout, startStripeCheckout, total }) {
+function PaymentFields({ provider }) {
   if (provider === "paypal") {
     return (
       <div className="payment-box">
@@ -1106,12 +918,10 @@ function PaymentFields({ provider, startPayPalCheckout, startStripeCheckout, tot
           <CreditCard size={16} />
           <strong>PayPal</strong>
         </div>
-        <div className="paypal-actions">
-          <button className="add-button" type="button" disabled={total <= 0} onClick={startPayPalCheckout}>
-            Zu PayPal wechseln
-          </button>
-        </div>
-        <p className="muted">Du wirst zur sicheren Zahlung weitergeleitet und kommst danach automatisch zur Bestellbestaetigung zurueck.</p>
+        <p className="muted">
+          Nach dem Absenden prueft das System zuerst den Lagerbestand und beauftragt danach die Zahlung ueber PayPal.
+          Du siehst das Ergebnis auf der Bestellbestaetigung.
+        </p>
       </div>
     );
   }
@@ -1121,12 +931,10 @@ function PaymentFields({ provider, startPayPalCheckout, startStripeCheckout, tot
         <CreditCard size={16} />
         <strong>Stripe</strong>
       </div>
-      <div className="paypal-actions">
-        <button className="add-button" type="button" disabled={total <= 0} onClick={startStripeCheckout}>
-          Zu Stripe wechseln
-        </button>
-      </div>
-      <p className="muted">Du wirst zur sicheren Zahlung weitergeleitet und kommst danach automatisch zur Bestellbestaetigung zurueck.</p>
+      <p className="muted">
+        Nach dem Absenden prueft das System zuerst den Lagerbestand und beauftragt danach die Zahlung ueber Stripe.
+        Du siehst das Ergebnis auf der Bestellbestaetigung.
+      </p>
     </div>
   );
 }
