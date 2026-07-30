@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from .config import settings
 from .logging_config import configure_logging
 from .messaging import build_message, consume_messages, publish_message
-from .payment import get_payment_facade
+from .payment import PaymentFacadeError, get_payment_facade
 from .payment.adapters import PaymentAdapter
 from .problem_details import register_problem_handlers
 
@@ -89,7 +89,42 @@ def handle_billing_message(message: dict) -> None:
         payload = message.get("payload", {})
         provider = payload.get("provider") or settings.payment_provider
         facade = get_payment_facade(provider)
-        result = facade.refund(payload["transactionId"], Decimal(payload["amount"]))
+        try:
+            result = facade.refund(
+                payload["transactionId"],
+                Decimal(payload["amount"]),
+                correlation_id=message["correlationId"],
+            )
+        except PaymentFacadeError as exc:
+            logger.error(
+                "Refund failed",
+                extra={
+                    "correlation_id": message["correlationId"],
+                    "context": {
+                        "eventType": "billing.refund.failed",
+                        "orderId": payload.get("orderId"),
+                        "transactionId": payload.get("transactionId"),
+                        "provider": provider,
+                        "error": str(exc),
+                    },
+                },
+            )
+            event = build_message(
+                "billing.refund.failed",
+                message["correlationId"],
+                {
+                    "orderId": payload["orderId"],
+                    "transactionId": payload.get("transactionId"),
+                    "provider": provider,
+                    "amount": payload["amount"],
+                    "currency": payload["currency"],
+                    "reasonCode": "REFUND_PROVIDER_ERROR",
+                    "message": str(exc),
+                },
+                previous_event_id=message["messageId"],
+            )
+            publish_message("billing.refund.failed", event)
+            return
         event = build_message(
             "billing.refund.succeeded",
             message["correlationId"],
@@ -141,7 +176,7 @@ def handle_billing_message(message: dict) -> None:
             payment.get("testPaymentMethod"),
             payment,
         )
-    except RuntimeError as exc:
+    except PaymentFacadeError as exc:
         publish_payment_result(
             status="FAILED",
             correlation_id=message["correlationId"],
@@ -156,6 +191,20 @@ def handle_billing_message(message: dict) -> None:
         )
         return
     if result.status.value == "PENDING":
+        event = build_message(
+            "billing.payment.pending",
+            message["correlationId"],
+            {
+                "orderId": payload["orderId"],
+                "transactionId": result.transaction_id,
+                "provider": result.provider,
+                "amount": payload["amount"],
+                "currency": payload["currency"],
+                "paymentStatus": result.status.value,
+            },
+            previous_event_id=message["messageId"],
+        )
+        publish_message("billing.payment.pending", event)
         logger.info(
             "Payment confirmation pending",
             extra={
