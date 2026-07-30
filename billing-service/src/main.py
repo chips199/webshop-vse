@@ -12,6 +12,7 @@ from .config import settings
 from .logging_config import configure_logging
 from .messaging import build_message, consume_messages, publish_message
 from .payment import get_payment_facade
+from .payment.adapters import PaymentAdapter
 from .problem_details import register_problem_handlers
 
 configure_logging()
@@ -21,18 +22,18 @@ consumer_thread: threading.Thread | None = None
 
 
 def publish_payment_result(
-    *,
-    status: str,
-    correlation_id: str,
-    previous_event_id: str | None,
-    order_id: str,
-    transaction_id: str | None,
-    provider: str,
-    amount: str,
-    currency: str,
-    scenario: str = "happy_path",
-    reason_code: str | None = None,
-    message: str | None = None,
+        *,
+        status: str,
+        correlation_id: str,
+        previous_event_id: str | None,
+        order_id: str,
+        transaction_id: str | None,
+        provider: str,
+        amount: str,
+        currency: str,
+        scenario: str = "happy_path",
+        reason_code: str | None = None,
+        message: str | None = None,
 ) -> None:
     if status == "SUCCEEDED":
         event_type = "billing.payment.succeeded"
@@ -358,11 +359,30 @@ async def receive_async_payment_webhook(request: AsyncPaymentWebhookRequest) -> 
     return AsyncPaymentWebhookResponse(eventType=event_type)
 
 
+def _get_adapter(provider: str) -> PaymentAdapter:
+    """Direkter Adapter-Zugriff nur fuer die Checkout-Hilfsendpunkte unten.
+
+    Diese Endpunkte sind kein Teil des in Abschnitt 3.1 geforderten
+    Facade-Interfaces (charge/refund/getStatus) - hier hat der Client
+    (Frontend) den Provider bereits explizit gewaehlt, es gibt also
+    keine Konfigurationsentscheidung zu kapseln. Der eigentliche
+    Bestell-/Zahlungsfluss (handle_billing_message) nutzt weiterhin
+    ausschliesslich get_payment_facade().
+    """
+    try:
+        adapter_class = PaymentAdapter.registry[provider]
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"Unsupported payment provider '{provider}'"
+        ) from exc
+    return adapter_class()
+
+
 @app.post("/paypal/orders", response_model=PayPalCreateOrderResponse)
 async def create_paypal_order(request: PayPalCreateOrderRequest) -> PayPalCreateOrderResponse:
-    facade = get_payment_facade("paypal")
+    adapter = _get_adapter("paypal")
     try:
-        result = facade.create_paypal_order(
+        result = adapter.create_order(
             request.referenceId,
             Decimal(request.amount),
             request.currency,
@@ -376,9 +396,9 @@ async def create_paypal_order(request: PayPalCreateOrderRequest) -> PayPalCreate
 
 @app.post("/paypal/orders/{paypalOrderId}/capture", response_model=PayPalCaptureResponse)
 async def capture_paypal_order(paypalOrderId: str) -> PayPalCaptureResponse:
-    facade = get_payment_facade("paypal")
+    adapter = _get_adapter("paypal")
     try:
-        result = facade.capture_paypal_order(paypalOrderId)
+        result = adapter.capture_order(paypalOrderId)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return PayPalCaptureResponse(**result)
@@ -386,9 +406,9 @@ async def capture_paypal_order(paypalOrderId: str) -> PayPalCaptureResponse:
 
 @app.post("/stripe/sessions", response_model=StripeCreateSessionResponse)
 async def create_stripe_session(request: StripeCreateSessionRequest) -> StripeCreateSessionResponse:
-    facade = get_payment_facade("stripe")
+    adapter = _get_adapter("stripe")
     try:
-        result = facade.create_stripe_session(
+        result = adapter.create_session(
             request.referenceId,
             Decimal(request.amount),
             request.currency,
@@ -404,9 +424,9 @@ async def create_stripe_session(request: StripeCreateSessionRequest) -> StripeCr
 
 @app.get("/stripe/sessions/{sessionId}", response_model=StripeSessionResponse)
 async def get_stripe_session(sessionId: str) -> StripeSessionResponse:
-    facade = get_payment_facade("stripe")
+    adapter = _get_adapter("stripe")
     try:
-        result = facade.retrieve_stripe_session(sessionId)
+        result = adapter.retrieve_session(sessionId)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return StripeSessionResponse(**result)

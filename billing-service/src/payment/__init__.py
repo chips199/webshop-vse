@@ -1,4 +1,10 @@
-from .facade import PaymentFacade, get_payment_facade
+from .facade import PaymentFacade, PaymentFacadeError, get_payment_facade
 from .models import PaymentResult, PaymentStatus
 
-__all__ = ["PaymentFacade", "PaymentResult", "PaymentStatus", "get_payment_facade"]
+__all__ = [
+    "PaymentFacade",
+    "PaymentFacadeError",
+    "PaymentResult",
+    "PaymentStatus",
+    "get_payment_facade",
+]
