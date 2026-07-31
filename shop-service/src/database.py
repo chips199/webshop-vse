@@ -530,6 +530,41 @@ def update_warehouse_commit(order_id: str, commit_status: str) -> None:
             cursor.execute(query, (commit_status, order_id))
 
 
+def claim_payment_confirmation(order_id: str) -> bool:
+    """Beansprucht die einmalige Zahlungsbestaetigung einer Order atomar.
+
+    Der Endpunkt POST /orders/{orderId}/payment-confirmation las den Status
+    zuvor per SELECT und verliess sich auf einen anschliessenden Vergleich in
+    Python - zwischen SELECT und dem Publizieren von
+    billing.payment.confirm.requested lag ein Zeitfenster, in dem ein
+    zweiter (paralleler) Aufruf denselben PAYMENT_ACTION_REQUIRED-Status noch
+    sehen und ebenfalls das Event ausloesen konnte. Bei PayPal fuehrt das im
+    Sandbox-Modus zu einem doppelten capture_order()-Aufruf.
+
+    Das WHERE status = 'PAYMENT_ACTION_REQUIRED' macht die Status-Pruefung
+    und den Uebergang atomar (Postgres serialisiert konkurrierende UPDATEs
+    auf derselben Zeile): nur der zuerst ankommende Aufruf trifft und darf
+    das Confirm-Event publizieren, jeder weitere erhaelt False und damit
+    einen 409-Conflict, statt einen zweiten Confirm-Request auszuloesen.
+    Ersetzt keine vollstaendige Idempotenzloesung mit Idempotency-Key
+    (Bonusaufgabe 4.2), schliesst aber genau diese Race Condition.
+    """
+    query = """
+    UPDATE shop_orders
+    SET status = %s, updated_at = now()
+    WHERE id = %s
+      AND status = %s
+    RETURNING id;
+    """
+    with psycopg.connect(settings.database_url, row_factory=dict_row) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                query,
+                ("PAYMENT_CONFIRMATION_PENDING", order_id, "PAYMENT_ACTION_REQUIRED"),
+            )
+            return cursor.fetchone() is not None
+
+
 def complete_order_if_ready(order_id: str) -> bool:
     query = """
     UPDATE shop_orders

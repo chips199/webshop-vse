@@ -3,8 +3,8 @@ import unittest
 from unittest.mock import patch
 
 from src.config import settings
-from src.payment import PaymentStatus, get_payment_facade
-from src.payment.adapters import PaymentAdapter, PayPalAdapter
+from src.payment import PaymentFacade, PaymentFacadeError, PaymentStatus, get_payment_facade
+from src.payment.adapters import PaymentAdapter, PayPalAdapter, StripeAdapter
 from src.payment.models import PaymentResult
 
 
@@ -148,6 +148,62 @@ class PaymentFacadeTest(unittest.TestCase):
         payload = schedule_webhook.call_args.args[0]
         self.assertEqual(payload["status"], "FAILED")
         self.assertEqual(payload["reasonCode"], "ASYNC_DECLINED")
+
+    # -- get_status()-Retry bei technischen Fehlern (Bereinigung Punkt 2) --
+    #
+    # Mit Sandbox-Credentials reichen StripeAdapter/PayPalAdapter technische
+    # Fehler (RuntimeError bei Netzwerk-/HTTP-Problemen) jetzt bis zur
+    # Fassade durch, statt sie selbst in FAILED umzuwandeln. Die folgenden
+    # Tests verifizieren, dass der Retry dadurch tatsaechlich mehrfach
+    # aufruft und am Ende PaymentFacadeError wirft, waehrend eine fachlich
+    # nicht abgeschlossene (aber technisch erfolgreich abgefragte) Zahlung
+    # weiterhin direkt und ohne Retry als FAILED zurueckkommt.
+
+    def test_stripe_get_status_retries_on_technical_error_then_raises(self) -> None:
+        settings.stripe_secret_key = "sk_test_dummy"
+        with patch.object(
+            StripeAdapter, "retrieve_session", side_effect=RuntimeError("Stripe sandbox request failed")
+        ) as retrieve_session:
+            facade = PaymentFacade(StripeAdapter(), max_attempts=2, retry_backoff_seconds=0)
+            with self.assertRaises(PaymentFacadeError):
+                facade.get_status("cs_test_123")
+        self.assertEqual(retrieve_session.call_count, 2)
+
+    def test_stripe_get_status_business_failure_is_not_retried(self) -> None:
+        settings.stripe_secret_key = "sk_test_dummy"
+        with patch.object(
+            StripeAdapter,
+            "retrieve_session",
+            return_value={"sessionId": "cs_test_123", "paymentStatus": "unpaid"},
+        ) as retrieve_session:
+            facade = PaymentFacade(StripeAdapter(), max_attempts=3, retry_backoff_seconds=0)
+            result = facade.get_status("cs_test_123")
+        self.assertEqual(result.status, PaymentStatus.FAILED)
+        retrieve_session.assert_called_once()
+
+    def test_paypal_get_status_retries_on_technical_error_then_raises(self) -> None:
+        settings.paypal_client_id = "client-id"
+        settings.paypal_client_secret = "client-secret"
+        with patch.object(
+            PayPalAdapter, "capture_order", side_effect=RuntimeError("PayPal sandbox request failed")
+        ) as capture_order:
+            facade = PaymentFacade(PayPalAdapter(), max_attempts=2, retry_backoff_seconds=0)
+            with self.assertRaises(PaymentFacadeError):
+                facade.get_status("8AC12345XA111111B")
+        self.assertEqual(capture_order.call_count, 2)
+
+    def test_paypal_get_status_business_failure_is_not_retried(self) -> None:
+        settings.paypal_client_id = "client-id"
+        settings.paypal_client_secret = "client-secret"
+        with patch.object(
+            PayPalAdapter,
+            "capture_order",
+            return_value={"orderId": "8AC12345XA222222B", "status": "VOIDED"},
+        ) as capture_order:
+            facade = PaymentFacade(PayPalAdapter(), max_attempts=3, retry_backoff_seconds=0)
+            result = facade.get_status("8AC12345XA222222B")
+        self.assertEqual(result.status, PaymentStatus.FAILED)
+        capture_order.assert_called_once()
 
 
 if __name__ == "__main__":

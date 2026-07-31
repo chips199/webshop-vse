@@ -21,6 +21,7 @@ from psycopg.errors import UniqueViolation
 
 from .config import settings
 from .database import calculate_total, create_admin_session, delete_admin_session
+from .database import claim_payment_confirmation
 from .database import create_order as create_order_record
 from .database import create_product as create_product_record
 from .database import enrich_items_from_products, get_admin_session, get_products
@@ -607,6 +608,17 @@ async def confirm_order_payment(orderId: str, confirmation: PaymentConfirmationR
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Order {orderId} is not awaiting a payment confirmation (status={order['status']}).",
+        )
+    # Claim ist die eigentliche (atomare) Absicherung gegen doppelte Aufrufe;
+    # die Pruefung oben ist nur ein schneller Vorab-Check fuer den 404/409-Fall
+    # ohne Beruehrung der Order. Zwischen diesem SELECT und dem claim liegt
+    # zwar weiterhin ein Zeitfenster, aber das UPDATE...WHERE status=... in
+    # claim_payment_confirmation() laesst bei einem parallelen Zweitaufruf
+    # keinen zweiten Treffer zu - siehe Docstring dort.
+    if not claim_payment_confirmation(orderId):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Order {orderId} payment confirmation was already processed.",
         )
     correlation_id = str(order["correlationId"])
 

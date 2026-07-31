@@ -71,7 +71,7 @@ function formatDateTime(value) {
 function statusTone(status = "") {
   if (["COMPLETED"].includes(status)) return "success";
   if (["PAYMENT_FAILED", "OUT_OF_STOCK", "REFUND_FAILED", "ROLLBACK_COMPLETED"].includes(status)) return "danger";
-  if (["INVOICE_RETRY_PENDING", "REFUND_PENDING", "PAYMENT_ACTION_REQUIRED"].includes(status)) return "warning";
+  if (["INVOICE_RETRY_PENDING", "REFUND_PENDING", "PAYMENT_ACTION_REQUIRED", "PAYMENT_CONFIRMATION_PENDING"].includes(status)) return "warning";
   return "pending";
 }
 

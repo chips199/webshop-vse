@@ -102,15 +102,14 @@ class StripeAdapter(PaymentAdapter):
 
     def get_status(self, transaction_id: str) -> PaymentResult:
         if settings.stripe_secret_key and not transaction_id.startswith("stripe-"):
-            try:
-                session = self.retrieve_session(transaction_id)
-            except RuntimeError as exc:
-                return PaymentResult(
-                    transaction_id=transaction_id,
-                    provider=self.provider_name,
-                    status=PaymentStatus.FAILED,
-                    reason=str(exc),
-                )
+            # RuntimeError aus retrieve_session() (Netzwerk-/HTTP-Fehler
+            # gegen die Stripe-Sandbox) wird hier bewusst NICHT abgefangen,
+            # sondern an die PaymentFacade durchgereicht: erst dadurch greift
+            # deren Retry-mit-Backoff ueberhaupt fuer get_status(). Nur eine
+            # erfolgreich abgefragte, aber fachlich nicht bezahlte Session
+            # fuehrt zu einem FAILED-PaymentResult (kein technischer Fehler,
+            # daher auch kein Retry-Kandidat).
+            session = self.retrieve_session(transaction_id)
             if session.get("paymentStatus") == "paid":
                 return PaymentResult(
                     transaction_id=transaction_id,
@@ -284,15 +283,18 @@ class PayPalAdapter(PaymentAdapter):
 
     def get_status(self, transaction_id: str) -> PaymentResult:
         if settings.paypal_client_id and settings.paypal_client_secret and not transaction_id.startswith("paypal-"):
-            try:
-                captured = self.capture_order(transaction_id)
-            except RuntimeError as exc:
-                return PaymentResult(
-                    transaction_id=transaction_id,
-                    provider=self.provider_name,
-                    status=PaymentStatus.FAILED,
-                    reason=str(exc),
-                )
+            # Analog zu StripeAdapter.get_status(): RuntimeError aus
+            # capture_order() (Netzwerk-/HTTP-Fehler) wird nicht abgefangen,
+            # sondern reicht bis zur PaymentFacade durch, damit deren Retry
+            # greift. Ein erneuter capture_order()-Aufruf nach einem
+            # technischen Fehler ist hier vertretbar: PayPal laesst eine
+            # bereits abgeschlossene Order kein zweites Mal capturen (die
+            # Sandbox-API antwortet dann mit einem Fehler statt einer
+            # zweiten Buchung), das Risiko einer echten Doppelbuchung durch
+            # den Retry selbst ist damit gering. Nur eine erfolgreich
+            # abgefragte, aber nicht abgeschlossene Order fuehrt zu einem
+            # FAILED-PaymentResult (kein technischer Fehler, kein Retry).
+            captured = self.capture_order(transaction_id)
             if captured.get("status") == "COMPLETED":
                 return PaymentResult(
                     transaction_id=captured.get("captureId", transaction_id),

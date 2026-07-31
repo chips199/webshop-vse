@@ -98,6 +98,15 @@ class PaymentFacade:
             correlation_id: str | None = None,
     ) -> PaymentResult:
         # Reiner Lesezugriff -> unkritisch, daher retryable.
+        #
+        # Damit dieser Retry tatsaechlich greift, reichen StripeAdapter und
+        # PayPalAdapter technische Fehler (RuntimeError bei Netzwerk-/HTTP-
+        # Fehlern gegen die Sandbox-API) aus get_status() unveraendert bis
+        # hierher durch, statt sie selbst in ein FAILED-PaymentResult
+        # umzuwandeln (siehe adapters.py). Nur ein fachliches "nicht
+        # abgeschlossen" (Session/Order erfolgreich abgefragt, aber nicht
+        # bezahlt/completed) liefert direkt FAILED zurueck - das ist kein
+        # technischer Fehler und wird bewusst nicht wiederholt.
         return self._execute(
             operation="get_status",
             correlation_id=correlation_id,
