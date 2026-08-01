@@ -497,15 +497,39 @@ def update_payment_action_required(order_id: str, transaction_id: str, redirect_
             cursor.execute(query, ("PAYMENT_ACTION_REQUIRED", transaction_id, redirect_url, order_id))
 
 
-def update_payment_succeeded(order_id: str, transaction_id: str) -> None:
+def update_payment_succeeded(
+    order_id: str,
+    transaction_id: str,
+    customer: dict[str, Any] | None = None,
+    shipping_address: dict[str, Any] | None = None,
+) -> None:
+    # customer/shipping_address kommen nur befuellt an, wenn der Kaeufer sie
+    # auf der echten Stripe-/PayPal-Sandbox-Seite eingegeben hat (siehe
+    # billing-service PaymentResult.customer/shipping_address). COALESCE
+    # sorgt dafuer, dass ohne solche Daten (z.B. lokaler Stub-Modus ohne
+    # Sandbox-Credentials) die im Checkout-Formular erfassten Werte stehen
+    # bleiben, statt mit NULL ueberschrieben zu werden.
     query = """
     UPDATE shop_orders
-    SET status = %s, transaction_id = %s, updated_at = now()
+    SET status = %s,
+        transaction_id = %s,
+        customer = COALESCE(%s, customer),
+        shipping_address = COALESCE(%s, shipping_address),
+        updated_at = now()
     WHERE id = %s;
     """
     with psycopg.connect(settings.database_url) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(query, ("PAYMENT_SUCCEEDED", transaction_id, order_id))
+            cursor.execute(
+                query,
+                (
+                    "PAYMENT_SUCCEEDED",
+                    transaction_id,
+                    Jsonb(customer) if customer else None,
+                    Jsonb(shipping_address) if shipping_address else None,
+                    order_id,
+                ),
+            )
 
 
 def update_invoice_created(order_id: str, invoice_id: str) -> None:

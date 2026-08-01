@@ -33,6 +33,8 @@ def publish_payment_result(
         scenario: str = "happy_path",
         reason_code: str | None = None,
         message: str | None = None,
+        customer: dict | None = None,
+        shipping_address: dict | None = None,
 ) -> None:
     if status == "SUCCEEDED":
         event_type = "billing.payment.succeeded"
@@ -45,6 +47,14 @@ def publish_payment_result(
             "scenario": scenario,
             "paymentStatus": status,
         }
+        # Nur gesetzt, wenn der Anbieter (mit Sandbox-Credentials) echte
+        # Kaeufer-/Adressdaten zurueckgeliefert hat (siehe PaymentResult in
+        # payment/models.py) - shop-service uebernimmt diese dann in die
+        # Order und ueberschreibt damit die Checkout-Formular-Eingaben.
+        if customer:
+            event_payload["customer"] = customer
+        if shipping_address:
+            event_payload["shippingAddress"] = shipping_address
     else:
         event_type = "billing.payment.failed"
         payment_result = "TIMEOUT" if reason_code == "PAYMENT_TIMEOUT" else "DECLINED"
@@ -127,6 +137,8 @@ def handle_billing_message(message: dict) -> None:
             provider=result.provider,
             amount=payload["amount"],
             currency=payload["currency"],
+            customer=result.customer,
+            shipping_address=result.shipping_address,
         )
         return
 

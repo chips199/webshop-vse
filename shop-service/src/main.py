@@ -87,7 +87,12 @@ def handle_saga_message(message: dict) -> None:
 
     if message_type == "billing.payment.succeeded":
         order_id = payload["orderId"]
-        update_payment_succeeded(order_id, payload["transactionId"])
+        update_payment_succeeded(
+            order_id,
+            payload["transactionId"],
+            customer=payload.get("customer"),
+            shipping_address=payload.get("shippingAddress"),
+        )
         request_invoice_with_circuit(order_id, correlation_id, payload, message)
 
         commit_requested = build_message(
@@ -409,6 +414,8 @@ class OrderResponse(BaseModel):
     currency: str | None = None
     transactionId: str | None = None
     paymentRedirectUrl: str | None = None
+    customer: dict | None = None
+    shippingAddress: dict | None = None
 
 
 class PaymentConfirmationRequest(BaseModel):
@@ -677,6 +684,8 @@ def _order_response(order: dict) -> OrderResponse:
         currency=order["currency"],
         transactionId=order.get("transactionId"),
         paymentRedirectUrl=order.get("paymentRedirectUrl"),
+        customer=order.get("customer"),
+        shippingAddress=order.get("shippingAddress"),
     )
 
 

@@ -116,6 +116,10 @@ class StripeAdapter(PaymentAdapter):
                     provider=self.provider_name,
                     status=PaymentStatus.SUCCEEDED,
                     reason=f"Stripe session {transaction_id} paid",
+                    customer=_with_real_content(session.get("customer"), "email", "firstName", "lastName"),
+                    shipping_address=_with_real_content(
+                        session.get("shippingAddress"), "street", "city", "postalCode"
+                    ),
                 )
             return PaymentResult(
                 transaction_id=transaction_id,
@@ -301,6 +305,10 @@ class PayPalAdapter(PaymentAdapter):
                     provider=self.provider_name,
                     status=PaymentStatus.SUCCEEDED,
                     reason=f"PayPal order {transaction_id} captured",
+                    customer=_with_real_content(captured.get("payer"), "email", "firstName", "lastName"),
+                    shipping_address=_with_real_content(
+                        captured.get("shippingAddress"), "street", "city", "postalCode"
+                    ),
                 )
             return PaymentResult(
                 transaction_id=transaction_id,
@@ -430,6 +438,27 @@ class PayPalAdapter(PaymentAdapter):
         return body["access_token"]
 
 
+_PLACEHOLDER_VALUES = {"", "-", "Stripe-Adresse", "PayPal-Adresse"}
+
+
+def _with_real_content(normalized: dict | None, *keys: str) -> dict | None:
+    """Filtert die _normalize_*-Ergebnisse auf echten Inhalt.
+
+    Die _normalize_stripe_*/_normalize_paypal_*-Helfer liefern immer ein
+    vollstaendiges Dict zurueck, auch wenn der Anbieter gar keine Kunden-/
+    Adressdaten mitgeschickt hat (z.B. PayPal ohne Shipping-Praeferenz) -
+    fehlende Werte werden dabei durch "", "-" oder (bei der Strasse) durch
+    die Platzhaltertexte "Stripe-Adresse"/"PayPal-Adresse" ersetzt. Ohne
+    diesen Filter wuerde get_status() die bereits im Checkout-Formular
+    erfassten echten Daten der Order mit diesen Platzhaltern ueberschreiben.
+    """
+    if not normalized:
+        return None
+    if any(str(normalized.get(key) or "").strip() not in _PLACEHOLDER_VALUES for key in keys):
+        return normalized
+    return None
+
+
 def _minor_units(amount: Decimal) -> int:
     return int((amount * Decimal("100")).quantize(Decimal("1")))
 
@@ -526,4 +555,11 @@ def _split_full_name(name: str) -> tuple[str, str]:
     parts = name.strip().split(" ", 1)
     if len(parts) == 2:
         return parts[0], parts[1]
-    return name.strip() or "Stripe", "Kunde"
+    stripped = name.strip()
+    if not stripped:
+        # Kein Fantasiename mehr ("Stripe"/"Kunde"): fehlt der Name in den
+        # Stripe-Kundendaten, bleibt das Feld leer statt einen Platzhalter
+        # vorzutaeuschen, der spaeter faelschlich als "echte Daten" in die
+        # Order uebernommen werden koennte (siehe _with_real_content()).
+        return "", ""
+    return stripped, ""

@@ -205,6 +205,114 @@ class PaymentFacadeTest(unittest.TestCase):
         self.assertEqual(result.status, PaymentStatus.FAILED)
         capture_order.assert_called_once()
 
+    # -- Kundendaten aus der Sandbox uebernehmen --
+    #
+    # Mit Sandbox-Credentials liefern Stripe/PayPal beim erfolgreichen
+    # get_status() echte Kaeufer-/Adressdaten mit, wenn der Kaeufer sie auf
+    # der Anbieter-Seite eingegeben hat. Die folgenden Tests verifizieren,
+    # dass PaymentResult.customer/.shipping_address dann befuellt sind, und
+    # dass reine Platzhalter-Antworten (keine echten Daten vom Anbieter)
+    # NICHT durchgereicht werden.
+
+    def test_stripe_get_status_returns_real_customer_and_shipping(self) -> None:
+        settings.stripe_secret_key = "sk_test_dummy"
+        with patch.object(
+            StripeAdapter,
+            "retrieve_session",
+            return_value={
+                "sessionId": "cs_test_123",
+                "paymentStatus": "paid",
+                "customer": {
+                    "firstName": "Grace",
+                    "lastName": "Hopper",
+                    "email": "grace.hopper@example.test",
+                    "phone": "",
+                },
+                "shippingAddress": {
+                    "street": "Turingstrasse",
+                    "houseNumber": "1",
+                    "postalCode": "10115",
+                    "city": "Berlin",
+                    "country": "DE",
+                    "recipientName": "Grace Hopper",
+                },
+            },
+        ):
+            result = get_payment_facade("stripe").get_status("cs_test_123")
+        self.assertEqual(result.customer["email"], "grace.hopper@example.test")
+        self.assertEqual(result.shipping_address["street"], "Turingstrasse")
+
+    def test_stripe_get_status_omits_placeholder_customer_and_shipping(self) -> None:
+        settings.stripe_secret_key = "sk_test_dummy"
+        with patch.object(
+            StripeAdapter,
+            "retrieve_session",
+            return_value={
+                "sessionId": "cs_test_123",
+                "paymentStatus": "paid",
+                "customer": {"firstName": "", "lastName": "", "email": "", "phone": ""},
+                "shippingAddress": {
+                    "street": "Stripe-Adresse",
+                    "houseNumber": "-",
+                    "postalCode": "-",
+                    "city": "-",
+                    "country": "-",
+                    "recipientName": "",
+                },
+            },
+        ):
+            result = get_payment_facade("stripe").get_status("cs_test_123")
+        self.assertIsNone(result.customer)
+        self.assertIsNone(result.shipping_address)
+
+    def test_paypal_get_status_returns_real_customer_and_shipping(self) -> None:
+        settings.paypal_client_id = "client-id"
+        settings.paypal_client_secret = "client-secret"
+        with patch.object(
+            PayPalAdapter,
+            "capture_order",
+            return_value={
+                "orderId": "8AC12345XA333333B",
+                "captureId": "CAP-1",
+                "status": "COMPLETED",
+                "payer": {
+                    "firstName": "Grace",
+                    "lastName": "Hopper",
+                    "email": "grace.hopper@example.test",
+                    "payerId": "PAYERID1",
+                },
+                "shippingAddress": {
+                    "street": "Turingstrasse",
+                    "houseNumber": "1",
+                    "postalCode": "10115",
+                    "city": "Berlin",
+                    "country": "DE",
+                    "recipientName": "Grace Hopper",
+                },
+            },
+        ):
+            result = get_payment_facade("paypal").get_status("8AC12345XA333333B")
+        self.assertEqual(result.customer["email"], "grace.hopper@example.test")
+        self.assertEqual(result.shipping_address["city"], "Berlin")
+
+    def test_paypal_get_status_omits_placeholder_customer_and_shipping(self) -> None:
+        settings.paypal_client_id = "client-id"
+        settings.paypal_client_secret = "client-secret"
+        with patch.object(
+            PayPalAdapter,
+            "capture_order",
+            return_value={
+                "orderId": "8AC12345XA444444B",
+                "captureId": "CAP-2",
+                "status": "COMPLETED",
+                "payer": {"firstName": "", "lastName": "", "email": "", "payerId": ""},
+                "shippingAddress": None,
+            },
+        ):
+            result = get_payment_facade("paypal").get_status("8AC12345XA444444B")
+        self.assertIsNone(result.customer)
+        self.assertIsNone(result.shipping_address)
+
 
 if __name__ == "__main__":
     unittest.main()

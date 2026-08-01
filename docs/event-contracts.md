@@ -80,11 +80,30 @@ Der Payload enthaelt nur die fachlichen Zahlungsdaten:
     "provider": "stripe",
     "amount": "49.90",
     "currency": "EUR",
-    "paymentStatus": "SUCCEEDED"
+    "paymentStatus": "SUCCEEDED",
+    "customer": {
+      "firstName": "Grace",
+      "lastName": "Hopper",
+      "email": "grace.hopper@example.test"
+    },
+    "shippingAddress": {
+      "street": "Turingstrasse",
+      "houseNumber": "1",
+      "postalCode": "10115",
+      "city": "Berlin",
+      "country": "DE"
+    }
   },
   "previousEventId": "ab8d54de-a7b4-49b4-91d2-7166c43f99bd"
 }
 ```
+
+`customer`/`shippingAddress` sind optional und nur gesetzt, wenn der Anbieter
+mit echten Sandbox-Credentials laeuft und der Kaeufer die Daten auf der
+Stripe-/PayPal-Sandbox-Seite tatsaechlich eingegeben hat (siehe ADR 003).
+Shop-Service uebernimmt sie dann in die Order und ueberschreibt damit die im
+eigenen Checkout-Formular erfassten Werte; ohne Sandbox-Credentials bleiben
+die Felder weg und die Formular-Eingaben bleiben massgeblich.
 
 `correlationId`, `timestamp`, `sourceService` und `type` werden nicht im
 Payload wiederholt, weil sie bereits fuer jede Message einheitlich im Envelope

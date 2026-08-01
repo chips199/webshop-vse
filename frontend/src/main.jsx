@@ -138,10 +138,15 @@ function loadStoredCart() {
 }
 
 function buildOrderConfirmation(confirmedOrder, { customer, shippingAddress, items, provider, total }) {
+  // confirmedOrder.customer/.shippingAddress kommen vom Backend und sind nur
+  // gesetzt, wenn der Kaeufer sie auf der echten Stripe-/PayPal-Sandbox-Seite
+  // eingegeben hat (siehe billing-service PaymentResult). Erst dann werden
+  // sie bevorzugt - sonst bleiben die im eigenen Checkout-Formular erfassten
+  // Werte stehen (z.B. im lokalen Stub-Modus ohne Sandbox-Credentials).
   return {
     order: confirmedOrder,
-    customer,
-    shippingAddress,
+    customer: confirmedOrder.customer || customer,
+    shippingAddress: confirmedOrder.shippingAddress || shippingAddress,
     items,
     payment: {
       provider,
