@@ -562,6 +562,20 @@ components:
           format: uri
           nullable: true
           description: Set while status is PAYMENT_ACTION_REQUIRED; the frontend redirects the browser here.
+        customer:
+          type: object
+          nullable: true
+          description: >-
+            Customer data as currently stored on the order. Initially the
+            checkout form input; overwritten once billing-service reports
+            real buyer data captured on the actual Stripe/PayPal sandbox
+            page (requires configured sandbox credentials).
+        shippingAddress:
+          type: object
+          nullable: true
+          description: >-
+            Shipping address as currently stored on the order. Same
+            override behaviour as customer.
     PaymentConfirmationRequest:
       type: object
       required: [outcome]
