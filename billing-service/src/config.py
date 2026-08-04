@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     # zu denen Stripe/PayPal den Kaeufer nach der Sandbox-Zahlung zurueck-
     # schicken.
     shop_frontend_base_url: str = "http://localhost:3000"
+    # Kommagetrennte Liste erlaubter CORS-Origins fuer die Browser-Aufrufe
+    # ans Frontend (siehe CORSMiddleware in main.py). Bewusst als eigene,
+    # konfigurierbare Einstellung statt aus shop_frontend_base_url
+    # abgeleitet: so kann z.B. in einem Deployment eine echte Domain
+    # gesetzt werden, ohne Code zu aendern (Vorgabe 5.2 der Aufgabenstellung
+    # - keine hartcodierten Werte im Code).
+    cors_allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     # Steuerung des Retry-mit-Backoff-Verhaltens der PaymentFacade (siehe
     # PaymentFacade._execute() in payment/facade.py).
     payment_retry_max_attempts: int = 3

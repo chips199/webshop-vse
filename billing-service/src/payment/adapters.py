@@ -128,7 +128,10 @@ class StripeAdapter(PaymentAdapter):
         Nur wenn es sich um eine echte Stripe-PaymentIntent-Id ("pi_...")
         handelt UND Sandbox-Credentials konfiguriert sind, wird tatsaechlich
         ein Refund-API-Call gemacht; Stub-Transaktionen ("stripe-...")
-        werden nur lokal als REFUNDED markiert.
+        werden nur lokal als REFUNDED markiert. Die "pi_..."-Id kommt aus
+        get_status() (dort auf "paymentIntentId" umgeschwenkt, sobald die
+        Session bezahlt ist) - die urspruengliche Checkout-Session-Id
+        ("cs_...") wuerde Stripes Refund-Endpunkt nicht akzeptieren.
         """
         if settings.stripe_secret_key and transaction_id.startswith("pi_"):
             self._request(
@@ -161,8 +164,15 @@ class StripeAdapter(PaymentAdapter):
             # daher auch kein Retry-Kandidat).
             session = self.retrieve_session(transaction_id)
             if session.get("paymentStatus") == "paid":
+                # Wie PayPalAdapter.get_status() bei Erfolg auf die captureId
+                # umschwenkt, geben wir hier auf die PaymentIntent-ID
+                # ("pi_...") aus - nicht mehr auf die urspruengliche Session-
+                # ID. Nur die PaymentIntent-ID akzeptiert Stripes Refund-
+                # Endpunkt (siehe refund() oben); ohne diesen Tausch waere
+                # ein spaeterer echter Refund nie moeglich, da die Session-ID
+                # dafuer nicht funktioniert.
                 return PaymentResult(
-                    transaction_id=transaction_id,
+                    transaction_id=session.get("paymentIntentId") or transaction_id,
                     provider=self.provider_name,
                     status=PaymentStatus.SUCCEEDED,
                     reason=f"Stripe session {transaction_id} paid",
@@ -251,10 +261,18 @@ class StripeAdapter(PaymentAdapter):
         sie (siehe _normalize_stripe_customer/_normalize_stripe_shipping).
         get_status() entscheidet anhand von "paymentStatus", ob die Zahlung
         erfolgreich war.
+
+        Liest zusaetzlich "payment_intent" aus: das ist bei einer bezahlten
+        Checkout Session (im "payment"-Modus) die eigentliche PaymentIntent-
+        ID ("pi_..."), die fuer einen spaeteren Refund benoetigt wird - die
+        Session-ID selbst ("cs_...") akzeptiert Stripes Refund-Endpunkt
+        nicht. Ohne diesen Wert waere ein echter Refund ueber refund()
+        unten nie moeglich.
         """
         body = self._request(f"https://api.stripe.com/v1/checkout/sessions/{session_id}", {}, method="GET")
         return {
             "sessionId": body["id"],
+            "paymentIntentId": body.get("payment_intent"),
             "status": body.get("status"),
             "paymentStatus": body.get("payment_status"),
             "customer": _normalize_stripe_customer(body.get("customer_details", {})),

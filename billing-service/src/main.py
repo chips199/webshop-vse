@@ -390,13 +390,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Billing Service API", version="0.1.0", lifespan=lifespan)
 register_problem_handlers(app)
-# CORS bewusst eng gehalten: nur das lokale Frontend darf browserseitig
-# zugreifen. Im Gateway-Prinzip des Projekts spricht das Frontend billing-
-# service aber ohnehin nie direkt an (nur ueber shop-service) - die Regel
-# hier ist eher Verteidigung in der Tiefe als aktiv genutzter Pfad.
+# CORS bewusst eng gehalten: nur das (per Konfiguration erlaubte) Frontend
+# darf browserseitig zugreifen - Origins kommen aus settings.cors_allowed_
+# origins statt hartcodiert zu sein, damit ein Deployment mit anderer
+# Frontend-URL keine Code-Aenderung braucht. Im Gateway-Prinzip des
+# Projekts spricht das Frontend billing-service aber ohnehin nie direkt an
+# (nur ueber shop-service) - die Regel hier ist eher Verteidigung in der
+# Tiefe als aktiv genutzter Pfad.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=[origin.strip() for origin in settings.cors_allowed_origins.split(",") if origin.strip()],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

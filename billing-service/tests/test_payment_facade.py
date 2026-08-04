@@ -205,6 +205,46 @@ class PaymentFacadeTest(unittest.TestCase):
         self.assertEqual(result.status, PaymentStatus.FAILED)
         capture_order.assert_called_once()
 
+    # -- transaction_id-Umschwenk auf die PaymentIntent-Id (Refund-Bugfix) --
+    #
+    # get_status() gab bei einer bezahlten Stripe-Session bisher weiterhin
+    # die Checkout-Session-Id ("cs_...") als transaction_id zurueck. Stripes
+    # Refund-Endpunkt akzeptiert aber nur eine PaymentIntent-Id ("pi_..."),
+    # wodurch refund() mit echten Credentials nie tatsaechlich einen
+    # Refund ausgeloest hat (transaction_id.startswith("pi_") war nie wahr).
+    # Der folgende Test verifiziert, dass get_status() jetzt korrekt auf
+    # "paymentIntentId" umschwenkt, sobald retrieve_session() eine liefert -
+    # analog zum bereits bestehenden captureId-Tausch bei PayPal.
+
+    def test_stripe_get_status_switches_to_payment_intent_id_on_success(self) -> None:
+        settings.stripe_secret_key = "sk_test_dummy"
+        with patch.object(
+            StripeAdapter,
+            "retrieve_session",
+            return_value={
+                "sessionId": "cs_test_123",
+                "paymentIntentId": "pi_test_456",
+                "paymentStatus": "paid",
+            },
+        ):
+            result = get_payment_facade("stripe").get_status("cs_test_123")
+        self.assertEqual(result.status, PaymentStatus.SUCCEEDED)
+        self.assertEqual(result.transaction_id, "pi_test_456")
+
+    def test_stripe_get_status_falls_back_to_session_id_without_payment_intent(self) -> None:
+        # Fehlt "payment_intent" in der Stripe-Antwort (sollte bei einer
+        # bezahlten Session im "payment"-Modus nicht vorkommen, aber
+        # verteidigt gegen unerwartete API-Antworten), bleibt get_status()
+        # bei der urspruenglichen Session-Id statt None zurueckzugeben.
+        settings.stripe_secret_key = "sk_test_dummy"
+        with patch.object(
+            StripeAdapter,
+            "retrieve_session",
+            return_value={"sessionId": "cs_test_123", "paymentStatus": "paid"},
+        ):
+            result = get_payment_facade("stripe").get_status("cs_test_123")
+        self.assertEqual(result.transaction_id, "cs_test_123")
+
     # -- Kundendaten aus der Sandbox uebernehmen --
     #
     # Mit Sandbox-Credentials liefern Stripe/PayPal beim erfolgreichen
