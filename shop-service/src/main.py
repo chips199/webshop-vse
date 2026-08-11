@@ -587,9 +587,9 @@ async def health() -> HealthResponse:
 
 
 @app.get("/products", response_model=list[ProductResponse])
-async def list_products(response: Response) -> list[ProductResponse]:
+async def list_products(request: Request, response: Response) -> list[ProductResponse]:
     response.headers["Cache-Control"] = "no-store"
-    stock_by_product_id = fetch_warehouse_stock()
+    stock_by_product_id = fetch_warehouse_stock(request.state.correlation_id)
     return [
         ProductResponse(**_serialize_product(product, stock_by_product_id.get(str(product["id"]))))
         for product in get_products()
@@ -846,8 +846,8 @@ async def admin_order_audit(orderId: str, _: str = Depends(require_admin)) -> Ad
 
 
 @app.get("/admin/products", response_model=list[ProductResponse])
-async def admin_products(_: str = Depends(require_admin)) -> list[ProductResponse]:
-    stock_by_product_id = fetch_warehouse_stock()
+async def admin_products(request: Request, _: str = Depends(require_admin)) -> list[ProductResponse]:
+    stock_by_product_id = fetch_warehouse_stock(request.state.correlation_id)
     return [
         ProductResponse(**_serialize_product(product, stock_by_product_id.get(str(product["id"]))))
         for product in get_products()
@@ -882,6 +882,7 @@ async def admin_upload_product_image(
 
 @app.post("/admin/products", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
 async def admin_create_product(
+    request: Request,
     product: ProductCreateRequest,
     _: str = Depends(require_admin),
 ) -> ProductResponse:
@@ -893,13 +894,15 @@ async def admin_create_product(
             "productId": product_id,
             "quantityOnHand": product.quantityOnHand,
             "location": product.location or "RETRO-A1",
-        }
+        },
+        request.state.correlation_id,
     )
     return ProductResponse(**_serialize_product(created, created_stock))
 
 
 @app.put("/admin/products/{productId}", response_model=ProductResponse)
 async def admin_update_product(
+    request: Request,
     productId: str,
     product: ProductUpdateRequest,
     _: str = Depends(require_admin),
@@ -907,21 +910,22 @@ async def admin_update_product(
     updated = update_product_record(productId, product.model_dump())
     if updated is None:
         raise HTTPException(status_code=404, detail=f"Product {productId} not found")
-    stock_by_product_id = fetch_warehouse_stock()
+    stock_by_product_id = fetch_warehouse_stock(request.state.correlation_id)
     return ProductResponse(**_serialize_product(updated, stock_by_product_id.get(str(updated["id"]))))
 
 
 @app.patch("/admin/products/{productId}/stock", response_model=ProductResponse)
 async def admin_update_product_stock(
+    request: Request,
     productId: str,
     stock: StockUpdateRequest,
     _: str = Depends(require_admin),
 ) -> ProductResponse:
-    update_warehouse_stock(productId, stock.model_dump())
+    update_warehouse_stock(productId, stock.model_dump(), request.state.correlation_id)
     product = next((entry for entry in get_products() if str(entry["id"]) == productId), None)
     if product is None:
         raise HTTPException(status_code=404, detail=f"Product {productId} not found")
-    stock_by_product_id = fetch_warehouse_stock()
+    stock_by_product_id = fetch_warehouse_stock(request.state.correlation_id)
     return ProductResponse(**_serialize_product(product, stock_by_product_id.get(productId)))
 
 
@@ -975,9 +979,19 @@ def fetch_audit_snapshots(correlation_id: str) -> list[dict]:
     return body.get("snapshots", [])
 
 
-def fetch_warehouse_stock() -> dict[str, dict]:
+def fetch_warehouse_stock(correlation_id: str | None = None) -> dict[str, dict]:
+    """Holt den aktuellen Lagerbestand aller Produkte vom Warehouse-Service.
+
+    `correlation_id` sollte immer die correlationId der aufrufenden Anfrage
+    sein (siehe correlation_id_middleware), damit sich der Aufruf im
+    strukturierten Logging/Tracing der Bestellung zuordnen laesst - vorher
+    wurde hier faelschlich bei jedem Aufruf eine neue, zufaellige uuid4()
+    erzeugt, was die Trace-Kette zwischen shop-service und warehouse-service
+    zerriss. Der Default None/Fallback auf eine neue uuid4() bleibt nur als
+    Absicherung fuer Aufrufe ohne Request-Kontext bestehen.
+    """
     url = f"{settings.warehouse_service_url.rstrip('/')}/stock"
-    request = UrlRequest(url, headers={"X-Correlation-Id": str(uuid4())})
+    request = UrlRequest(url, headers={"X-Correlation-Id": correlation_id or str(uuid4())})
     try:
         with urlopen(request, timeout=3) as response:
             stock_entries = json.loads(response.read().decode("utf-8"))
@@ -987,12 +1001,16 @@ def fetch_warehouse_stock() -> dict[str, dict]:
     return {entry["productId"]: entry for entry in stock_entries}
 
 
-def update_warehouse_stock(product_id: str, stock: dict) -> dict:
+def update_warehouse_stock(product_id: str, stock: dict, correlation_id: str | None = None) -> dict:
+    """Aktualisiert den Lagerbestand eines Produkts im Warehouse-Service.
+
+    Siehe fetch_warehouse_stock() zum Zweck von correlation_id.
+    """
     url = f"{settings.warehouse_service_url.rstrip('/')}/stock/{product_id}"
     request = UrlRequest(
         url,
         data=json.dumps(stock).encode("utf-8"),
-        headers={"Content-Type": "application/json", "X-Correlation-Id": str(uuid4())},
+        headers={"Content-Type": "application/json", "X-Correlation-Id": correlation_id or str(uuid4())},
         method="PATCH",
     )
     try:
@@ -1005,12 +1023,16 @@ def update_warehouse_stock(product_id: str, stock: dict) -> dict:
         raise HTTPException(status_code=502, detail=f"Warehouse service unavailable: {exc}") from exc
 
 
-def create_warehouse_stock(stock: dict) -> dict:
+def create_warehouse_stock(stock: dict, correlation_id: str | None = None) -> dict:
+    """Legt einen initialen Lagerbestand fuer ein neu angelegtes Produkt an.
+
+    Siehe fetch_warehouse_stock() zum Zweck von correlation_id.
+    """
     url = f"{settings.warehouse_service_url.rstrip('/')}/stock"
     request = UrlRequest(
         url,
         data=json.dumps(stock).encode("utf-8"),
-        headers={"Content-Type": "application/json", "X-Correlation-Id": str(uuid4())},
+        headers={"Content-Type": "application/json", "X-Correlation-Id": correlation_id or str(uuid4())},
         method="POST",
     )
     try:

@@ -53,9 +53,21 @@ def _connect_with_retry(stop_event: threading.Event) -> pika.BlockingConnection 
         try:
             parameters = pika.URLParameters(settings.rabbitmq_url)
             return pika.BlockingConnection(parameters)
-        except pika.exceptions.AMQPConnectionError:
+        except (pika.exceptions.AMQPConnectionError, OSError) as exc:
+            # OSError zusaetzlich zu AMQPConnectionError: schlaegt schon die
+            # DNS-Aufloesung des RabbitMQ-Hostnamens fehl (z.B. weil der
+            # RabbitMQ-Container gerade neu startet und Docker-DNS den Namen
+            # kurzzeitig nicht auflösen kann), wirft pika intern einen rohen
+            # socket.gaierror durch, OHNE ihn in AMQPConnectionError zu packen
+            # (siehe pika.adapters.blocking_connection.
+            # _reap_last_connection_workflow_error - nur
+            # AMQPConnectorSocketConnectError wird gewrappt, ein Fehler in der
+            # Resolve-Phase wird unveraendert durchgereicht). Ohne dieses
+            # OSError hier wuerde der Consumer-Thread bei genau diesem
+            # Szenario endgueltig sterben, statt es erneut zu versuchen.
             logger.warning(
-                "RabbitMQ nicht erreichbar, naechster Verbindungsversuch in %ss",
+                "RabbitMQ nicht erreichbar (%s), naechster Verbindungsversuch in %ss",
+                exc,
                 delay,
             )
             stop_event.wait(delay)
@@ -127,7 +139,12 @@ def publish_message(routing_key: str, message: dict[str, Any]) -> None:
                 return
             finally:
                 connection.close()
-        except pika.exceptions.AMQPError as exc:
+        except (pika.exceptions.AMQPError, OSError) as exc:
+            # OSError zusaetzlich zu AMQPError: siehe Kommentar in
+            # _connect_with_retry() - eine DNS-Aufloesung des RabbitMQ-
+            # Hostnamens kann waehrend eines Neustarts als roher
+            # socket.gaierror durchschlagen, ohne von pika in eine eigene
+            # AMQP-Exception gepackt zu werden.
             last_exc = exc
             if attempt < _PUBLISH_MAX_ATTEMPTS:
                 logger.warning(
@@ -200,7 +217,12 @@ def consume_messages(
                     # sie verworfen und der Fehler geloggt.
                     logger.exception("Failed to handle billing message")
                     channel.basic_nack(method_frame.delivery_tag, requeue=False)
-        except pika.exceptions.AMQPError as exc:
+        except (pika.exceptions.AMQPError, OSError) as exc:
+            # OSError zusaetzlich zu AMQPError: aus Konsistenz mit
+            # _connect_with_retry() - falls auch bei einer bereits
+            # bestehenden Verbindung ein roher Socket-Fehler (statt einer
+            # von pika gewrappten AMQP-Exception) durchschlaegt, soll der
+            # Consumer-Thread trotzdem sauber neu verbinden statt zu sterben.
             # AMQPError ist die gemeinsame Basisklasse ALLER pika-Fehler -
             # sowohl verbindungsbezogener (AMQPConnectionError, StreamLostError,
             # ConnectionClosedByBroker, ...) als auch kanalbezogener

@@ -13,6 +13,7 @@ class PaymentFacadeTest(unittest.TestCase):
         self._stripe_secret_key = settings.stripe_secret_key
         self._paypal_client_id = settings.paypal_client_id
         self._paypal_client_secret = settings.paypal_client_secret
+        self._payment_provider = settings.payment_provider
         settings.stripe_secret_key = None
         settings.paypal_client_id = None
         settings.paypal_client_secret = None
@@ -21,12 +22,31 @@ class PaymentFacadeTest(unittest.TestCase):
         settings.stripe_secret_key = self._stripe_secret_key
         settings.paypal_client_id = self._paypal_client_id
         settings.paypal_client_secret = self._paypal_client_secret
+        settings.payment_provider = self._payment_provider
 
     def test_selects_stripe_provider(self) -> None:
         self.assertEqual(get_payment_facade("stripe").provider_name, "stripe")
 
     def test_selects_paypal_provider(self) -> None:
         self.assertEqual(get_payment_facade("paypal").provider_name, "paypal")
+
+    def test_provider_switch_via_configuration(self) -> None:
+        """Anbieterwechsel per Konfiguration (Aufgabenblatt 5.2), nicht per Code.
+
+        Anders als test_selects_stripe_provider/test_selects_paypal_provider
+        oben - die den Provider explizit als Argument uebergeben - ruft dieser
+        Test get_payment_facade() bewusst OHNE Argument auf. Damit greift der
+        `provider or settings.payment_provider`-Fallback in facade.py, und es
+        wird tatsaechlich der ueber settings.payment_provider konfigurierte
+        Default ausgewaehlt - genau der Mechanismus, ueber den ein
+        Anbieterwechsel im Betrieb (per ENV-Variable) laeuft, ohne Code zu
+        aendern.
+        """
+        settings.payment_provider = "paypal"
+        self.assertEqual(get_payment_facade().provider_name, "paypal")
+
+        settings.payment_provider = "stripe"
+        self.assertEqual(get_payment_facade().provider_name, "stripe")
 
     def test_stripe_charge_succeeds(self) -> None:
         result = get_payment_facade("stripe").charge("order-1", Decimal("49.90"), "EUR")

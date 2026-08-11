@@ -7,6 +7,34 @@ and IBM Model M keyboards.
 The service starts the RabbitMQ-based order saga and stores order status in
 PostgreSQL.
 
+## Prerequisites
+
+- Docker and Docker Compose (recommended - runs this service together with
+  PostgreSQL, RabbitMQ and the other backend services it depends on)
+- Alternatively, for standalone development: Python 3.12, a reachable
+  PostgreSQL instance (database `shop_service`) and a reachable RabbitMQ
+  instance
+
+## Getting started
+
+Via Docker Compose, from the repository root (starts the full stack):
+
+```bash
+docker compose up --build shop-service
+```
+
+Standalone, from this directory, against dependencies already running
+elsewhere (e.g. via `docker compose up postgres rabbitmq warehouse-service`):
+
+```bash
+pip install -r requirements.txt
+uvicorn src.main:app --reload --port 8000
+```
+
+The service listens on port `8000` by default (see `SERVICE_PORT` below).
+Health check: `GET http://localhost:8000/health`. Interactive API docs:
+`http://localhost:8000/docs`.
+
 ## Local endpoints
 
 - `GET /health`

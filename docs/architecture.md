@@ -14,6 +14,8 @@ Warehouse und Billing synchron per REST aufzurufen. Diese Entscheidung ist in
 
 ## 2. Systemkontext
 
+_Quelldatei: [`docs/diagrams/systemkontext.mmd`](diagrams/systemkontext.mmd)_
+
 ```mermaid
 flowchart LR
     Customer[Kunde]
@@ -31,6 +33,8 @@ flowchart LR
 ```
 
 ## 3. Komponenten
+
+_Quelldatei: [`docs/diagrams/komponenten.mmd`](diagrams/komponenten.mmd)_
 
 ```mermaid
 flowchart LR
@@ -114,6 +118,8 @@ Die verbindlichen Routing Keys sind in `docs/event-contracts.md` dokumentiert.
 
 ## 5. Happy Path
 
+_Quelldatei: [`docs/diagrams/sequenz-happy-path.mmd`](diagrams/sequenz-happy-path.mmd)_
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -157,6 +163,8 @@ sequenceDiagram
 ```
 
 ## 6. Fehlerszenario: Zahlung abgelehnt
+
+_Quelldatei: [`docs/diagrams/sequenz-fehlerszenario-zahlung-abgelehnt.mmd`](diagrams/sequenz-fehlerszenario-zahlung-abgelehnt.mmd)_
 
 ```mermaid
 sequenceDiagram

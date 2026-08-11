@@ -140,10 +140,18 @@ Zur Laufzeit stellt FastAPI zusaetzlich `/docs` und `/openapi.json` bereit.
 
 ## Tests
 
-Smoke-Test:
+Smoke-Test (Erreichbarkeit aller Services + ein Happy-Path-Durchlauf):
 
 ```bash
 bash scripts/smoke-test.sh
+```
+
+Integrationstests fuer den Bestellprozess (Happy Path + zwei
+Fehlerszenarien - Zahlung abgelehnt, Lager nicht ausreichend - inkl.
+Pruefung der jeweils erwarteten Audit-Event-Kette):
+
+```bash
+bash scripts/integration-test.sh
 ```
 
 Unit-Tests in Containern:

@@ -3,6 +3,34 @@
 FastAPI service for invoice generation after successful payments. Business
 messages are consumed from RabbitMQ.
 
+## Prerequisites
+
+- Docker and Docker Compose (recommended - runs this service together with
+  PostgreSQL and RabbitMQ)
+- Alternatively, for standalone development: Python 3.12, a reachable
+  PostgreSQL instance (database `invoice_service`) and a reachable RabbitMQ
+  instance
+
+## Getting started
+
+Via Docker Compose, from the repository root (starts the full stack):
+
+```bash
+docker compose up --build invoice-service
+```
+
+Standalone, from this directory, against dependencies already running
+elsewhere (e.g. via `docker compose up postgres rabbitmq`):
+
+```bash
+pip install -r requirements.txt
+uvicorn src.main:app --reload --port 8003
+```
+
+The service listens on port `8003` by default (see `SERVICE_PORT` below).
+Health check: `GET http://localhost:8003/health`. Interactive API docs:
+`http://localhost:8003/docs`.
+
 ## Local endpoints
 
 - `GET /health`

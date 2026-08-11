@@ -55,9 +55,9 @@ fuer Smoke-Tests und technische Abnahme ueber definierte Request-Werte erhalten.
 Das Skript `scripts/smoke-test.sh` prueft:
 
 - Health-Endpunkte.
-- Erstellen einer Bestellung pro Szenario.
-- Erreichen des erwarteten Endstatus.
-- Vorhandensein einer Audit-Timeline.
+- Produktkatalog.
+- Eine Happy-Path-Bestellung bis zum Endstatus `COMPLETED`.
+- Vorhandensein einer Audit-Timeline und geschuetzten Admin-Zugriff.
 
 Aufruf:
 
@@ -69,6 +69,29 @@ Die URLs koennen bei Bedarf ueberschrieben werden:
 
 ```bash
 SHOP_API=http://localhost:8000 AUDIT_API=http://localhost:8004 bash scripts/smoke-test.sh
+```
+
+## Automatisierte Integrationstests (Bestellprozess)
+
+Das Skript `scripts/integration-test.sh` deckt genau die in Abschnitt
+"Abnahmeszenarien" oben genannten Faelle end-to-end ab (Aufgabenblatt 5.2:
+"Integrationstests fuer den Bestellprozess: Happy Path und mindestens zwei
+Fehlerszenarien"):
+
+- Happy Path (`happy_path`) bis `COMPLETED`.
+- Zahlung abgelehnt (`payment_failed`) bis `PAYMENT_FAILED`, inkl. Nachweis
+  der Saga-Kompensation (Warehouse-Reservierung wird storniert).
+- Lager nicht ausreichend (`out_of_stock`) bis `OUT_OF_STOCK`, inkl.
+  Nachweis, dass **kein** weiterer Aufruf (Zahlung/Rechnung) erfolgt.
+
+Jedes Szenario prueft zusaetzlich per Admin-Audit-Endpunkt, dass die
+erwartete Event-Kette tatsaechlich als Audit-Snapshot vorliegt, nicht nur
+den Endstatus der Bestellung.
+
+Aufruf:
+
+```bash
+bash scripts/integration-test.sh
 ```
 
 ## Definition of Done

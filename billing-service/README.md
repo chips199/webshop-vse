@@ -5,6 +5,35 @@ Stripe are available behind the facade. With sandbox credentials the adapters
 call the Stripe/PayPal sandbox APIs; without credentials they fall back to
 deterministic local stubs.
 
+## Prerequisites
+
+- Docker and Docker Compose (recommended - runs this service together with
+  PostgreSQL and RabbitMQ)
+- Alternatively, for standalone development: Python 3.12, a reachable
+  PostgreSQL instance (database `billing_service`) and a reachable RabbitMQ
+  instance
+
+## Getting started
+
+Via Docker Compose, from the repository root (starts the full stack):
+
+```bash
+docker compose up --build billing-service
+```
+
+Standalone, from this directory, against dependencies already running
+elsewhere (e.g. via `docker compose up postgres rabbitmq`):
+
+```bash
+pip install -r requirements.txt
+uvicorn src.main:app --reload --port 8002
+```
+
+The service listens on port `8002` by default (see `SERVICE_PORT` below).
+Health check: `GET http://localhost:8002/health`. Interactive API docs:
+`http://localhost:8002/docs`. billing-service has no client-facing UI - it is
+only reached via RabbitMQ messages published by shop-service (see below).
+
 ## Local endpoints
 
 - `GET /health`
