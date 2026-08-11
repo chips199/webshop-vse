@@ -140,9 +140,34 @@ def handle_saga_message(message: dict) -> None:
         return
 
     if message_type == "invoice.failed":
+        order_id = payload["orderId"]
+        # attempt kommt von invoice-service durchgereicht (siehe dortiges
+        # handle_invoice_message) - Default 1 nur zur Absicherung, falls eine
+        # aeltere/fremde Nachricht ohne dieses Feld hereinkommt.
+        attempt = payload.get("attempt", 1)
         transition = invoice_circuit_breaker.record_failure(payload.get("reasonCode", "INVOICE_FAILED"))
-        publish_invoice_circuit_transition(correlation_id, payload["orderId"], transition, message["messageId"])
-        update_order_status(payload["orderId"], "INVOICE_RETRY_PENDING")
+        publish_invoice_circuit_transition(correlation_id, order_id, transition, message["messageId"])
+
+        if attempt < settings.invoice_max_retries:
+            # Noch Versuche uebrig: Bestellung bleibt (sichtbar) im Retry-Zustand,
+            # und die Shop-Saga plant selbst den naechsten Versuch (siehe
+            # schedule_invoice_retry) - invoice-service haelt dafuer keinen
+            # eigenen Zustand mehr.
+            update_order_status(order_id, "INVOICE_RETRY_PENDING")
+            schedule_invoice_retry(order_id, correlation_id, payload, message, attempt)
+        else:
+            # Alle Versuche verbraucht: endgueltiger, nicht mehr automatisch
+            # wiederholter Fehlerzustand - bewusst von INVOICE_RETRY_PENDING
+            # unterschieden, damit im Admin-Frontend erkennbar ist, dass hier
+            # kein weiterer Versuch mehr folgt.
+            update_order_status(order_id, "INVOICE_FAILED")
+            logger.error(
+                "Invoice creation failed permanently after exhausting retries",
+                extra={
+                    "correlation_id": correlation_id,
+                    "context": {"orderId": order_id, "attempt": attempt, "maxAttempts": settings.invoice_max_retries},
+                },
+            )
         return
 
     if message_type == "warehouse.commit.succeeded":
@@ -205,7 +230,23 @@ def maybe_publish_order_completed(order_id: str, correlation_id: str, previous_m
     publish_message("order.completed", order_completed)
 
 
-def request_invoice_with_circuit(order_id: str, correlation_id: str, payload: dict, previous_message: dict) -> None:
+def request_invoice_with_circuit(
+    order_id: str,
+    correlation_id: str,
+    payload: dict,
+    previous_message: dict,
+    attempt: int = 1,
+) -> None:
+    """Fordert eine Rechnung an - Circuit-Breaker-gated, mit Versuchsnummer.
+
+    `attempt` ist 1 beim allerersten Versuch (ausgeloest durch
+    billing.payment.succeeded) und wird bei Wiederholungen von
+    schedule_invoice_retry() hochgezaehlt durchgereicht. invoice-service
+    bekommt den Wert im Payload mit, damit es ihn beim Melden eines
+    Fehlschlags unveraendert zurueckspiegeln kann (siehe invoice.failed-Zweig
+    oben) - so muss der Retry-Zaehler an keiner Stelle dauerhaft
+    gespeichert werden.
+    """
     try:
         transition = invoice_circuit_breaker.before_call()
         publish_invoice_circuit_transition(correlation_id, order_id, transition, previous_message["messageId"])
@@ -229,6 +270,7 @@ def request_invoice_with_circuit(order_id: str, correlation_id: str, payload: di
         "shippingAddress": order.get("shippingAddress") or {},
         "billingAddress": order.get("billingAddress"),
         "items": order.get("items") or [],
+        "attempt": attempt,
     }
     invoice_requested = build_message(
         "invoice.create.requested",
@@ -237,6 +279,61 @@ def request_invoice_with_circuit(order_id: str, correlation_id: str, payload: di
         previous_event_id=previous_message["messageId"],
     )
     publish_message("invoice.create.requested", invoice_requested)
+
+
+def schedule_invoice_retry(
+    order_id: str,
+    correlation_id: str,
+    payload: dict,
+    previous_message: dict,
+    attempt: int,
+) -> None:
+    """Plant nach kurzem Backoff einen weiteren Rechnungs-Versuch.
+
+    Diese Retry-Orchestrierung sitzt bewusst hier in der Shop-Saga und nicht
+    mehr in invoice-service: nur shop-service kennt den Zustand des
+    Circuit Breakers fuer Invoice-Aufrufe (Bonusaufgabe 4.1) und damit, ob ein
+    weiterer Versuch aktuell ueberhaupt sinnvoll ist. Der eigentliche
+    Retry-Aufruf laeuft in einem eigenen Timer-Thread ab (wie z.B. auch der
+    verzoegerte Webhook in billing-service), damit der Nachrichten-Consumer
+    hier nicht blockiert wird.
+
+    `payload` ist das Payload der invoice.failed-Nachricht und enthaelt
+    bereits transactionId/provider/amount/currency/scenario - alles, was
+    request_invoice_with_circuit() braucht (Kunden-/Lieferdaten werden dort
+    ohnehin frisch per get_order_record() nachgeladen statt hier
+    mitgeschleppt zu werden).
+    """
+    next_attempt = attempt + 1
+    retry_event = build_message(
+        "invoice.retry.scheduled",
+        correlation_id,
+        {
+            "orderId": order_id,
+            "transactionId": payload.get("transactionId"),
+            "attempt": next_attempt,
+            "maxAttempts": settings.invoice_max_retries,
+            "reasonCode": payload.get("reasonCode", "INVOICE_RENDER_FAILED"),
+            "message": payload.get("message"),
+        },
+        previous_event_id=previous_message["messageId"],
+    )
+    publish_message("invoice.retry.scheduled", retry_event)
+
+    delay_seconds = settings.invoice_retry_backoff_seconds * attempt
+    timer = threading.Timer(
+        delay_seconds,
+        request_invoice_with_circuit,
+        kwargs={
+            "order_id": order_id,
+            "correlation_id": correlation_id,
+            "payload": payload,
+            "previous_message": retry_event,
+            "attempt": next_attempt,
+        },
+    )
+    timer.daemon = True
+    timer.start()
 
 
 def publish_invoice_circuit_transition(

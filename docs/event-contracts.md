@@ -42,8 +42,8 @@ Alle Commands und Events verwenden denselben Envelope:
 | `billing.refund.succeeded` | Billing-Service | Shop-Service, Audit-Service | Refund erfolgreich abgeschlossen |
 | `billing.refund.failed` | Billing-Service | Shop-Service, Audit-Service | Refund fehlgeschlagen |
 | `invoice.created` | Invoice-Service | Shop-Service, Audit-Service | Rechnung erfolgreich erstellt |
-| `invoice.retry.scheduled` | Invoice-Service | Audit-Service | Wiederholversuch fuer Rechnungserstellung vorgemerkt |
-| `invoice.failed` | Invoice-Service | Shop-Service, Audit-Service | Rechnungserstellung fehlgeschlagen |
+| `invoice.retry.scheduled` | Shop-Service | Audit-Service | Wiederholversuch fuer Rechnungserstellung vorgemerkt |
+| `invoice.failed` | Invoice-Service | Shop-Service, Audit-Service | Rechnungserstellung (ein einzelner Versuch) fehlgeschlagen |
 | `invoice.circuit.state.changed` | Shop-Service | Audit-Service | Circuit-Breaker-Zustand fuer Invoice-Service hat gewechselt |
 | `order.completed` | Shop-Service | Audit-Service | Bestellung erfolgreich abgeschlossen |
 | `order.rollback.completed` | Shop-Service | Audit-Service | Kompensation abgeschlossen |
@@ -158,3 +158,15 @@ Retry-Events enthalten zusaetzlich `attempt` und `maxAttempts`.
 Circuit-Breaker-Events enthalten `circuitName`, `previousState`, `state`,
 `failureCount` und `reasonCode`, damit im Audit sichtbar bleibt, wann der
 Invoice-Service-Circuit nach `OPEN`, `HALF_OPEN` oder `CLOSED` gewechselt ist.
+
+Die Rechnungs-Retries sind bewusst Teil der Shop-Saga und nicht von
+Invoice-Service selbst gesteuert: Invoice-Service macht pro
+`invoice.create.requested` genau einen Versuch und meldet einen Fehlschlag
+ueber `invoice.failed` zurueck (inklusive `attempt` sowie `provider`,
+`amount`, `currency` und `scenario`). Shop-Service entscheidet anhand des
+Invoice-Circuit-Breakers (siehe oben) und der erreichten `attempt`-Zahl, ob
+ein weiterer Versuch sinnvoll ist - falls ja, verlaengert es `attempt` um
+eins, publiziert selbst `invoice.retry.scheduled` und stoesst nach kurzem
+Backoff ein neues `invoice.create.requested` an. Sind alle Versuche
+verbraucht, wechselt die Bestellung von `INVOICE_RETRY_PENDING` in den
+endgueltigen Zustand `INVOICE_FAILED`.

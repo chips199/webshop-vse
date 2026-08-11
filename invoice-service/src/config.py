@@ -9,7 +9,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://webshop:webshop@localhost:5432/webshop"
     rabbitmq_url: str = "amqp://webshop:webshop@localhost:5672/"
     invoice_output_dir: str = "invoices"
-    invoice_max_retries: int = 3
+    # invoice_max_retries lebt bewusst NICHT mehr hier: invoice-service macht pro
+    # "invoice.create.requested" genau einen Versuch, die Retry-Anzahl/-Orchestrierung
+    # gehoert zur Shop-Saga (siehe shop-service/src/config.py, invoice_max_retries).
 
 
 settings = Settings()

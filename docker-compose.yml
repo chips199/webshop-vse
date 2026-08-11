@@ -42,6 +42,8 @@ services:
       INVOICE_CIRCUIT_BREAKER_FAILURE_THRESHOLD: 3
       INVOICE_CIRCUIT_BREAKER_RESET_SECONDS: 30
       INVOICE_CIRCUIT_BREAKER_HALF_OPEN_MAX_CALLS: 1
+      INVOICE_MAX_RETRIES: 3
+      INVOICE_RETRY_BACKOFF_SECONDS: 0.2
       ADMIN_USERNAME: admin
       ADMIN_PASSWORD: admin123
       ADMIN_COOKIE_SECURE: "false"
@@ -104,7 +106,6 @@ services:
       SERVICE_PORT: 8003
       DATABASE_URL: postgresql://webshop:webshop@postgres:5432/invoice_service
       INVOICE_OUTPUT_DIR: /app/invoices
-      INVOICE_MAX_RETRIES: 3
       RABBITMQ_URL: amqp://webshop:webshop@rabbitmq:5672/
     ports:
       - "8003:8003"

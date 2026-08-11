@@ -73,12 +73,12 @@ def consume_audit_events(
                 except Exception:
                     logger.exception("Failed to handle audit message")
                     channel.basic_nack(method_frame.delivery_tag, requeue=False)
-        except (
-                pika.exceptions.AMQPConnectionError,
-                pika.exceptions.StreamLostError,
-                pika.exceptions.ChannelClosedByBroker,
-                pika.exceptions.ConnectionClosedByBroker,
-        ) as exc:
+        except pika.exceptions.AMQPError as exc:
+            # AMQPError ist die gemeinsame Basisklasse ALLER pika-Fehler
+            # (Connection- UND Channel-bezogen) - eine schmalere Liste
+            # einzelner Exception-Typen liesse den Consumer-Thread bei einer
+            # nicht explizit gelisteten Variante (z.B. ChannelWrongStateError)
+            # lautlos sterben, ohne sich je wieder zu verbinden.
             if stop_event.is_set():
                 return
             logger.warning("RabbitMQ-Verbindung verloren (%s), verbinde neu...", exc)

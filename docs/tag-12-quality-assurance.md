@@ -24,7 +24,7 @@ wird.
 | Erfolgreiche Bestellung | `happy_path` | `COMPLETED` | `ORDER_CREATED`, `BILLING_PAYMENT_SUCCEEDED`, `INVOICE_CREATED`, `ORDER_COMPLETED` |
 | Nicht verfuegbarer Artikel | `out_of_stock` | `OUT_OF_STOCK` | `WAREHOUSE_RESERVATION_FAILED` |
 | Zahlung abgelehnt | `payment_failed` | `PAYMENT_FAILED` | `BILLING_PAYMENT_FAILED`, `WAREHOUSE_CANCEL_REQUESTED`, `WAREHOUSE_CANCEL_SUCCEEDED` |
-| Rechnung fehlerhaft | `invoice_failed` | `INVOICE_RETRY_PENDING` | `INVOICE_RETRY_SCHEDULED`, `INVOICE_FAILED`, `INVOICE_CIRCUIT_STATE_CHANGED` nach drei Folgefehlern |
+| Rechnung fehlerhaft | `invoice_failed` | `INVOICE_FAILED` (nach drei Versuchen; zwischenzeitlich `INVOICE_RETRY_PENDING`) | `INVOICE_FAILED`, `INVOICE_RETRY_SCHEDULED` (von Shop-Service, zweimal), `INVOICE_CIRCUIT_STATE_CHANGED` nach jedem Fehlversuch (Circuit `OPEN` nach dem dritten) |
 | Warehouse-Commit scheitert | `warehouse_commit_failed` | `ROLLBACK_COMPLETED` | `WAREHOUSE_COMMIT_FAILED`, `BILLING_REFUND_REQUESTED`, `BILLING_REFUND_SUCCEEDED`, `ORDER_ROLLBACK_COMPLETED` |
 
 ## Manuelle Pruefung

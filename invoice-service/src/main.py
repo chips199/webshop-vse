@@ -2,7 +2,6 @@ from contextlib import asynccontextmanager
 import logging
 from pathlib import Path
 import threading
-import time
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -24,79 +23,79 @@ invoice_dir = Path(settings.invoice_output_dir)
 
 
 def handle_invoice_message(message: dict) -> None:
+    """Verarbeitet EIN "invoice.create.requested"-Command mit genau einem Versuch.
+
+    Wichtig: invoice-service selbst wiederholt NICHT mehr intern (frueher gab es
+    hier eine 3-malige Retry-Schleife samt "invoice.retry.scheduled"). Die
+    Retry-Orchestrierung gehoert fachlich in die Shop-Saga: nur shop-service kennt
+    den Zustand des zugehoerigen Circuit Breakers (Bonusaufgabe 4.1) und kann
+    entscheiden, ob/wann ein weiterer Versuch sinnvoll ist. Schlaegt die
+    Rechnungserstellung hier fehl, wird deshalb sofort (nach genau einem Versuch)
+    "invoice.failed" veroeffentlicht - inklusive "attempt" und der fachlichen
+    Zahlungsdaten (provider/amount/currency/scenario), damit shop-service daraus
+    bei Bedarf einen neuen "invoice.create.requested" mit attempt+1 bauen kann,
+    ohne dass invoice-service selbst Retry-Zustand halten muss.
+    """
     if message["type"] != "invoice.create.requested":
         return
 
     payload = message.get("payload", {})
     invoice_id = str(uuid4())
-    previous_event_id = message["messageId"]
-    last_error = ""
+    # attempt kommt von shop-service (1 beim Erstversuch, sonst hochgezaehlt) -
+    # invoice-service nutzt den Wert nur zum Protokollieren/Speichern, nicht
+    # fuer eigene Retry-Entscheidungen.
+    attempt = payload.get("attempt", 1)
 
-    for attempt in range(1, settings.invoice_max_retries + 1):
-        try:
-            upsert_invoice_processing(invoice_id, message["correlationId"], payload, attempt)
-            if payload.get("scenario") == "invoice_failed":
-                raise RuntimeError("Rechnungserstellung wurde fuer das Fehlerszenario gezielt abgelehnt.")
+    try:
+        upsert_invoice_processing(invoice_id, message["correlationId"], payload, attempt)
+        if payload.get("scenario") == "invoice_failed":
+            raise RuntimeError("Rechnungserstellung wurde fuer das Fehlerszenario gezielt abgelehnt.")
 
-            invoice_path = create_invoice_pdf(invoice_id, message["correlationId"], payload)
-            mark_invoice_created(invoice_id, str(invoice_path), attempt)
-            event = build_message(
-                "invoice.created",
-                message["correlationId"],
-                {
-                    "invoiceId": invoice_id,
-                    "orderId": payload["orderId"],
-                    "transactionId": payload["transactionId"],
-                    "status": "CREATED",
-                    "pdfPath": str(invoice_path),
-                    "attempts": attempt,
-                },
-                previous_event_id=previous_event_id,
-            )
-            publish_message("invoice.created", event)
-            return
-        except Exception as exc:
-            last_error = str(exc)
-            logger.warning(
-                "Invoice creation attempt failed",
-                extra={
-                    "correlation_id": message["correlationId"],
-                    "context": {"orderId": payload.get("orderId"), "attempt": attempt, "error": last_error},
-                },
-            )
-            if attempt < settings.invoice_max_retries:
-                time.sleep(0.2 * attempt)
-                retry_event = build_message(
-                    "invoice.retry.scheduled",
-                    message["correlationId"],
-                    {
-                        "orderId": payload["orderId"],
-                        "transactionId": payload["transactionId"],
-                        "attempt": attempt + 1,
-                        "maxAttempts": settings.invoice_max_retries,
-                        "reasonCode": "INVOICE_RENDER_FAILED",
-                        "message": last_error,
-                    },
-                    previous_event_id=previous_event_id,
-                )
-                publish_message("invoice.retry.scheduled", retry_event)
-                previous_event_id = retry_event["messageId"]
-
-    mark_invoice_failed(invoice_id, last_error, settings.invoice_max_retries)
-    failed_event = build_message(
-        "invoice.failed",
-        message["correlationId"],
-        {
-            "invoiceId": invoice_id,
-            "orderId": payload["orderId"],
-            "transactionId": payload["transactionId"],
-            "reasonCode": "INVOICE_RENDER_FAILED",
-            "message": "Rechnungserstellung nach drei Versuchen fehlgeschlagen.",
-            "lastError": last_error,
-        },
-        previous_event_id=previous_event_id,
-    )
-    publish_message("invoice.failed", failed_event)
+        invoice_path = create_invoice_pdf(invoice_id, message["correlationId"], payload)
+        mark_invoice_created(invoice_id, str(invoice_path), attempt)
+        event = build_message(
+            "invoice.created",
+            message["correlationId"],
+            {
+                "invoiceId": invoice_id,
+                "orderId": payload["orderId"],
+                "transactionId": payload["transactionId"],
+                "status": "CREATED",
+                "pdfPath": str(invoice_path),
+                "attempts": attempt,
+            },
+            previous_event_id=message["messageId"],
+        )
+        publish_message("invoice.created", event)
+    except Exception as exc:
+        last_error = str(exc)
+        logger.warning(
+            "Invoice creation attempt failed",
+            extra={
+                "correlation_id": message["correlationId"],
+                "context": {"orderId": payload.get("orderId"), "attempt": attempt, "error": last_error},
+            },
+        )
+        mark_invoice_failed(invoice_id, last_error, attempt)
+        failed_event = build_message(
+            "invoice.failed",
+            message["correlationId"],
+            {
+                "invoiceId": invoice_id,
+                "orderId": payload["orderId"],
+                "transactionId": payload["transactionId"],
+                "provider": payload.get("provider"),
+                "amount": payload.get("amount"),
+                "currency": payload.get("currency"),
+                "scenario": payload.get("scenario", "happy_path"),
+                "attempt": attempt,
+                "reasonCode": "INVOICE_RENDER_FAILED",
+                "message": "Rechnungserstellung fehlgeschlagen.",
+                "lastError": last_error,
+            },
+            previous_event_id=message["messageId"],
+        )
+        publish_message("invoice.failed", failed_event)
 
 
 def create_invoice_pdf(invoice_id: str, correlation_id: str, payload: dict) -> Path:

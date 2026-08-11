@@ -1,6 +1,7 @@
 import json
 import logging
 import threading
+import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
@@ -18,6 +19,13 @@ logger = logging.getLogger(__name__)
 
 _INITIAL_RECONNECT_DELAY_SECONDS = 2
 _MAX_RECONNECT_DELAY_SECONDS = 30
+# Begrenzter Retry fuer publish_message(): faengt kurze Aussetzer/einen
+# RabbitMQ-Neustart waehrend eines einzelnen Publish-Versuchs ab, ohne einen
+# HTTP-Request oder den Consumer-Thread bei einem laengeren Ausfall
+# unbegrenzt zu blockieren (dafuer ist consume_messages()/_connect_with_retry
+# mit ihrem unbegrenzten Backoff gedacht).
+_PUBLISH_MAX_ATTEMPTS = 3
+_PUBLISH_RETRY_BACKOFF_SECONDS = 1.0
 
 
 def build_message(
@@ -38,22 +46,46 @@ def build_message(
 
 
 def publish_message(routing_key: str, message: dict[str, Any]) -> None:
-    parameters = pika.URLParameters(settings.rabbitmq_url)
-    connection = pika.BlockingConnection(parameters)
-    try:
-        channel = connection.channel()
-        channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type="topic", durable=True)
-        channel.basic_publish(
-            exchange=EXCHANGE_NAME,
-            routing_key=routing_key,
-            body=json.dumps(message).encode("utf-8"),
-            properties=pika.BasicProperties(
-                content_type="application/json",
-                delivery_mode=pika.DeliveryMode.Persistent,
-            ),
-        )
-    finally:
-        connection.close()
+    """Veroeffentlicht eine Nachricht auf dem Exchange, mit kurzem Retry bei Ausfall.
+
+    Wiederholt bis zu _PUBLISH_MAX_ATTEMPTS Mal mit kurzem Backoff, falls
+    RabbitMQ gerade nicht erreichbar ist (z.B. mitten in einem Neustart).
+    Bleibt der Ausfall laenger bestehen, wird die letzte Exception nach dem
+    letzten Versuch weitergereicht - kein Ersatz fuer den unbegrenzten
+    Reconnect-Loop der Consumer-Seite (_connect_with_retry).
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, _PUBLISH_MAX_ATTEMPTS + 1):
+        try:
+            parameters = pika.URLParameters(settings.rabbitmq_url)
+            connection = pika.BlockingConnection(parameters)
+            try:
+                channel = connection.channel()
+                channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type="topic", durable=True)
+                channel.basic_publish(
+                    exchange=EXCHANGE_NAME,
+                    routing_key=routing_key,
+                    body=json.dumps(message).encode("utf-8"),
+                    properties=pika.BasicProperties(
+                        content_type="application/json",
+                        delivery_mode=pika.DeliveryMode.Persistent,
+                    ),
+                )
+                return
+            finally:
+                connection.close()
+        except pika.exceptions.AMQPError as exc:
+            last_exc = exc
+            if attempt < _PUBLISH_MAX_ATTEMPTS:
+                logger.warning(
+                    "RabbitMQ-Publish fehlgeschlagen (Versuch %s/%s), naechster Versuch in %ss: %s",
+                    attempt,
+                    _PUBLISH_MAX_ATTEMPTS,
+                    _PUBLISH_RETRY_BACKOFF_SECONDS * attempt,
+                    exc,
+                )
+                time.sleep(_PUBLISH_RETRY_BACKOFF_SECONDS * attempt)
+    raise last_exc
 
 
 def _connect_with_retry(stop_event: threading.Event) -> pika.BlockingConnection | None:
@@ -116,12 +148,14 @@ def consume_messages(
                 except Exception:
                     logger.exception("Failed to handle invoice message")
                     channel.basic_nack(method_frame.delivery_tag, requeue=False)
-        except (
-                pika.exceptions.AMQPConnectionError,
-                pika.exceptions.StreamLostError,
-                pika.exceptions.ChannelClosedByBroker,
-                pika.exceptions.ConnectionClosedByBroker,
-        ) as exc:
+        except pika.exceptions.AMQPError as exc:
+            # AMQPError ist die gemeinsame Basisklasse ALLER pika-Fehler
+            # (Connection- UND Channel-bezogen) - eine schmalere Liste
+            # einzelner Exception-Typen liesse den Consumer-Thread bei einer
+            # nicht explizit gelisteten Variante (z.B. ChannelWrongStateError,
+            # wenn RabbitMQ genau waehrend eines publish_message()-Aufrufs
+            # ausfaellt und der anschliessende basic_nack() ebenfalls fehl-
+            # schlaegt) lautlos sterben, ohne sich je wieder zu verbinden.
             if stop_event.is_set():
                 return
             logger.warning("RabbitMQ-Verbindung verloren (%s), verbinde neu...", exc)

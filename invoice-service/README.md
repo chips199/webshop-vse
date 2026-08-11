@@ -12,14 +12,23 @@ messages are consumed from RabbitMQ.
 ## RabbitMQ
 
 - Consumes `invoice.create.requested`
-- Publishes `invoice.retry.scheduled`
 - Publishes `invoice.created`
 - Publishes `invoice.failed`
 
+invoice-service makes exactly **one** attempt per `invoice.create.requested`
+message; it no longer retries internally and no longer publishes
+`invoice.retry.scheduled` itself. Retry orchestration (how many attempts,
+backoff, when to give up) now lives in shop-service's saga, since only
+shop-service knows the state of the invoice circuit breaker (see
+`shop-service/README.md`). On failure, invoice-service reports back via
+`invoice.failed` (including the `attempt` number and the payment fields
+shop-service needs to build a follow-up request), and shop-service decides
+whether/when to schedule the next attempt.
+
 Invoices are rendered as retro-styled PDF files with order number, transaction,
 customer, shipping address, billing address, purchased items and total amount.
-They are stored in the configured invoice output directory. Metadata and retry
-status are stored in the `invoice_service` PostgreSQL database.
+They are stored in the configured invoice output directory. Metadata is stored
+in the `invoice_service` PostgreSQL database.
 
 ## Configuration
 
@@ -28,4 +37,3 @@ status are stored in the `invoice_service` PostgreSQL database.
 - `DATABASE_URL`
 - `RABBITMQ_URL`
 - `INVOICE_OUTPUT_DIR`
-- `INVOICE_MAX_RETRIES`
