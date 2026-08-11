@@ -178,6 +178,25 @@ paths:
           description: Admin login required
         "404":
           description: Order not found
+  /admin/orders/events:
+    get:
+      summary: Server-Sent-Events stream for real-time admin dashboard updates
+      description: >-
+        Streams a minimal {orderId, correlationId, reason} event whenever an
+        order changes (new order, saga status update, payment confirmation).
+        The frontend reacts by re-fetching the affected order via the
+        existing REST endpoints - this stream carries no order state itself.
+      security:
+        - AdminCookie: []
+      responses:
+        "200":
+          description: text/event-stream of order-change notifications
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401":
+          description: Admin login required
   /admin/products:
     get:
       summary: List products with warehouse stock for admin editing

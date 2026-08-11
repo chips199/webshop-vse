@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
@@ -24,6 +24,8 @@ import {
   Trash2,
   Truck,
   User,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
 import "./styles.css";
 
@@ -988,9 +990,22 @@ function AdminPage() {
   const [productError, setProductError] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [loading, setLoading] = useState(false);
   const [savingProductId, setSavingProductId] = useState("");
   const [activeAdminView, setActiveAdminView] = useState("orders");
+  const [liveStatus, setLiveStatus] = useState("connecting");
+
+  // Ref statt State: der SSE-useEffect unten soll die Verbindung NICHT bei
+  // jedem Klick auf eine andere Bestellung neu aufbauen, braucht aber trotzdem
+  // Zugriff auf die aktuell ausgewaehlte Bestellung, um bei einem passenden
+  // Live-Event gezielt deren Timeline nachzuladen (siehe flushPendingReload
+  // im SSE-useEffect weiter unten).
+  const selectedOrderIdRef = useRef(null);
+  useEffect(() => {
+    selectedOrderIdRef.current = selectedOrder?.orderId ?? null;
+  }, [selectedOrder]);
 
   useEffect(() => {
     fetch(`${SHOP_API}/admin/session`, { credentials: "include" })
@@ -1005,11 +1020,74 @@ function AdminPage() {
     loadAdminProducts();
   }, [session.authenticated]);
 
+  // Echtzeit-Aktualisierung per Server-Sent Events (Bonusaufgabe 4.3): der
+  // manuelle "Aktualisieren"-Button bleibt zusaetzlich erhalten, aber die
+  // Bestellliste und eine gerade geoeffnete Detailansicht aktualisieren sich
+  // jetzt von selbst, sobald sich im Backend etwas an einer Bestellung
+  // aendert - ohne dass der Browser dafuer pollen muss.
+  useEffect(() => {
+    if (!session.authenticated) return undefined;
+
+    setLiveStatus("connecting");
+    const source = new EventSource(`${SHOP_API}/admin/orders/events`, { withCredentials: true });
+
+    // Mehrere Saga-Events fuer dieselbe Bestellung koennen kurz hintereinander
+    // eintreffen (z.B. Reservierung, Zahlung, Rechnung, Warehouse-Commit beim
+    // Happy Path). Statt bei jedem einzelnen Event sofort neu zu laden, wird
+    // kurz gesammelt und dann in einem Rutsch aktualisiert.
+    let debounceTimer = null;
+    const pendingOrderIds = new Set();
+
+    function flushPendingReload() {
+      debounceTimer = null;
+      loadOrders();
+      if (selectedOrderIdRef.current && pendingOrderIds.has(selectedOrderIdRef.current)) {
+        loadTimeline(selectedOrderIdRef.current);
+      }
+      pendingOrderIds.clear();
+    }
+
+    source.onopen = () => setLiveStatus("live");
+    source.onerror = () => {
+      // EventSource baut die Verbindung nach einem Fehler automatisch
+      // wieder auf - hier wird nur die Anzeige aktualisiert, kein manueller
+      // Reconnect noetig.
+      setLiveStatus("offline");
+    };
+    source.onmessage = (event) => {
+      if (!event.data) return;
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload.orderId) {
+          pendingOrderIds.add(payload.orderId);
+        }
+      } catch {
+        return;
+      }
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(flushPendingReload, 400);
+    };
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      source.close();
+    };
+  }, [session.authenticated]);
+
   const statusOptions = useMemo(() => ["all", ...Array.from(new Set(orders.map((entry) => entry.status))).sort()], [orders]);
   const filteredOrders = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
+    // dateFrom/dateTo kommen aus <input type="date"> als "YYYY-MM-DD" (lokale
+    // Zeit) - dateFrom wird auf 00:00:00 des Tages verankert, dateTo auf
+    // 23:59:59.999, damit der gewaehlte Endtag noch vollstaendig eingeschlossen
+    // ist statt bei Mitternacht abgeschnitten zu werden.
+    const fromTime = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : null;
+    const toTime = dateTo ? new Date(`${dateTo}T23:59:59.999`).getTime() : null;
     return orders.filter((entry) => {
       const matchesStatus = statusFilter === "all" || entry.status === statusFilter;
+      const createdAtTime = entry.createdAt ? new Date(entry.createdAt).getTime() : null;
+      const matchesFrom = fromTime === null || (createdAtTime !== null && createdAtTime >= fromTime);
+      const matchesTo = toTime === null || (createdAtTime !== null && createdAtTime <= toTime);
       const haystack = [
         entry.orderId,
         entry.correlationId,
@@ -1023,9 +1101,9 @@ function AdminPage() {
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
-      return matchesStatus && (!normalizedSearch || haystack.includes(normalizedSearch));
+      return matchesStatus && matchesFrom && matchesTo && (!normalizedSearch || haystack.includes(normalizedSearch));
     });
-  }, [orders, search, statusFilter]);
+  }, [orders, search, statusFilter, dateFrom, dateTo]);
   const dashboardStats = useMemo(() => {
     const completed = orders.filter((entry) => entry.status === "COMPLETED");
     const open = orders.filter((entry) => !["COMPLETED", "PAYMENT_FAILED", "OUT_OF_STOCK", "ROLLBACK_COMPLETED"].includes(entry.status));
@@ -1169,16 +1247,25 @@ function AdminPage() {
     }
   }
 
-  async function selectOrder(order) {
-    setSelectedOrder(order);
-    setTimeline([]);
-    const response = await fetch(`${SHOP_API}/admin/orders/${order.orderId}/audit`, { credentials: "include" });
+  async function loadTimeline(orderId) {
+    // Getrennt von selectOrder(), damit ein Live-Update (siehe SSE-useEffect
+    // oben) die Timeline der gerade geoeffneten Bestellung nachladen kann,
+    // ohne setSelectedOrder()/setTimeline([]) erneut auszuloesen - das wuerde
+    // sonst bei jedem Live-Event kurz einen leeren Timeline-Zustand aufblitzen
+    // lassen.
+    const response = await fetch(`${SHOP_API}/admin/orders/${orderId}/audit`, { credentials: "include" });
     if (response.ok) {
       const audit = await response.json();
       setTimeline(audit.snapshots || []);
     } else {
       setError("Audit-Timeline konnte nicht geladen werden.");
     }
+  }
+
+  async function selectOrder(order) {
+    setSelectedOrder(order);
+    setTimeline([]);
+    await loadTimeline(order.orderId);
   }
 
   if (!session.authenticated) {
@@ -1206,6 +1293,10 @@ function AdminPage() {
           <h2>Admin Dashboard</h2>
         </div>
         <div className="admin-actions">
+          <span className={`live-indicator ${liveStatus}`} title="Echtzeit-Aktualisierung (Server-Sent Events)">
+            {liveStatus === "live" ? <Wifi size={16} /> : <WifiOff size={16} />}
+            {liveStatus === "live" ? "Live" : liveStatus === "connecting" ? "Verbinde..." : "Offline"}
+          </span>
           <button className="link-button" onClick={loadOrders} disabled={loading}>
             <RefreshCw size={16} />
             Aktualisieren
@@ -1281,6 +1372,26 @@ function AdminPage() {
                 ))}
               </select>
             </label>
+            <label className="admin-filter">
+              <span>Von</span>
+              <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} max={dateTo || undefined} />
+            </label>
+            <label className="admin-filter">
+              <span>Bis</span>
+              <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} min={dateFrom || undefined} />
+            </label>
+            {(dateFrom || dateTo) && (
+              <button
+                type="button"
+                className="link-button"
+                onClick={() => {
+                  setDateFrom("");
+                  setDateTo("");
+                }}
+              >
+                Zeitraum zuruecksetzen
+              </button>
+            )}
           </div>
 
           <div className="admin-grid">

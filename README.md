@@ -192,7 +192,10 @@ Der Adminbereich ist unter `/admin` erreichbar und per HttpOnly-Session-Cookie g
 
 Funktionen:
 
-- Bestellungen und Status einsehen
+- Bestellungen und Status einsehen, live aktualisiert per Server-Sent Events
+  (kein manuelles Neuladen noetig, siehe `GET /admin/orders/events`)
+- Filterung nach Status, Zeitraum und Freitextsuche (Order/Kunde/Transaktion,
+  inkl. correlationId)
 - Audit-Timeline pro Bestellung anzeigen
 - Artikel anlegen und bearbeiten
 - Warehouse-Mengen und Lagerorte pflegen

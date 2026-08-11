@@ -1,9 +1,11 @@
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
 from pathlib import Path
+import queue
 import re
 import secrets
 import threading
@@ -15,10 +17,12 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from psycopg.errors import UniqueViolation
 
+from . import realtime
 from .config import settings
 from .database import calculate_total, create_admin_session, delete_admin_session
 from .database import claim_payment_confirmation
@@ -54,6 +58,16 @@ def handle_saga_message(message: dict) -> None:
     message_type = message["type"]
     payload = message.get("payload", {})
     correlation_id = message["correlationId"]
+
+    # Admin-Dashboard-Echtzeit-Update (Bonusaufgabe 4.3): bewusst EIN
+    # generischer Hook direkt hier statt eines eigenen Aufrufs in jedem der
+    # vielen if-Zweige unten - fast jede Saga-Nachricht traegt eine orderId
+    # im Payload, und dem Dashboard reicht "fuer diese Bestellung hat sich
+    # etwas getan, bitte neu laden" (siehe realtime.py). Laeuft im
+    # Consumer-Thread und darf daher nicht blockieren - notify_admin_dashboard
+    # faengt eigene Fehler ab, damit ein Problem beim Publizieren die
+    # eigentliche Saga-Verarbeitung niemals stoeren kann.
+    notify_admin_dashboard(payload.get("orderId"), correlation_id, message_type)
 
     if message_type == "warehouse.reservation.succeeded":
         order_id = payload["orderId"]
@@ -213,6 +227,27 @@ def handle_saga_message(message: dict) -> None:
 
     if message_type == "billing.refund.failed":
         update_order_status(payload["orderId"], "REFUND_FAILED")
+
+
+def notify_admin_dashboard(order_id: str | None, correlation_id: str | None, reason: str) -> None:
+    """Benachrichtigt alle verbundenen Admin-Dashboards ueber eine Aenderung.
+
+    `reason` ist der ausloesende Nachrichtentyp (z.B. "billing.payment.
+    succeeded") bzw. "order.created"/"order.payment-confirmation" fuer die
+    beiden HTTP-Aufrufstellen unten - nur zu Debugging-/Logging-Zwecken im
+    Frontend, keine fachliche Bedeutung fuer den Consumer der SSE-Verbindung
+    (siehe admin_events() / realtime.py): das Dashboard reagiert einheitlich
+    mit "betroffene Bestellung neu laden", unabhaengig vom genauen Grund.
+    """
+    if not order_id:
+        return
+    try:
+        realtime.publish({"orderId": str(order_id), "correlationId": str(correlation_id), "reason": reason})
+    except Exception:
+        # Darf die eigentliche Verarbeitung (Saga-Consumer oder HTTP-Request)
+        # niemals stoeren - das Live-Update ist ein Komfortfeature, kein
+        # fachlich kritischer Pfad.
+        logger.warning("Failed to publish admin dashboard realtime event", extra={"context": {"orderId": order_id}})
 
 
 def maybe_publish_order_completed(order_id: str, correlation_id: str, previous_message: dict) -> None:
@@ -662,6 +697,7 @@ async def create_order(request: Request, order: CreateOrderRequest) -> OrderResp
         },
     )
     publish_message("order.created", order_created)
+    notify_admin_dashboard(order_id, correlation_id, "order.created")
 
     reserve_requested = build_message(
         "warehouse.reserve.requested",
@@ -725,6 +761,7 @@ async def confirm_order_payment(orderId: str, confirmation: PaymentConfirmationR
             detail=f"Order {orderId} payment confirmation was already processed.",
         )
     correlation_id = str(order["correlationId"])
+    notify_admin_dashboard(orderId, correlation_id, "order.payment-confirmation")
 
     if confirmation.outcome == "cancelled":
         update_order_status(orderId, "PAYMENT_FAILED")
@@ -843,6 +880,73 @@ async def admin_order_audit(orderId: str, _: str = Depends(require_admin)) -> Ad
         orderId=orderId,
         snapshots=fetch_audit_snapshots(str(order["correlationId"])),
     )
+
+
+@app.get("/admin/orders/events")
+async def admin_orders_events(request: Request, _: str = Depends(require_admin)) -> StreamingResponse:
+    """Server-Sent-Events-Stream fuer Echtzeit-Updates im Admin-Dashboard (Bonus 4.3).
+
+    Statt bei jeder Aenderung den vollen Bestellzustand zu pushen (was hier
+    doppelte Business-Logik ggue. den bestehenden REST-Endpunkten bedeuten
+    wuerde), sendet dieser Stream nur ein minimales "orderId X hat sich
+    veraendert"-Signal (siehe realtime.py/notify_admin_dashboard). Das
+    Frontend reagiert darauf, indem es die Bestellliste bzw. die gerade
+    geoeffnete Detailansicht per bestehendem REST-Aufruf neu laedt - einzige
+    Quelle der Wahrheit bleibt die Datenbank, nicht der Event-Stream selbst.
+    """
+
+    async def event_stream():
+        subscriber_queue = realtime.subscribe()
+        try:
+            # Direkt nach Verbindungsaufbau ein Kommentar-Event senden, damit
+            # der Browser die SSE-Verbindung sofort als erfolgreich geoeffnet
+            # erkennt (EventSource wertet erst eine "data:"-Zeile als Event,
+            # ein Kommentar reicht aber schon, um die Verbindung "warm" zu
+            # halten und Proxies/Load-Balancer nicht vorzeitig timeouten zu
+            # lassen).
+            yield ": connected\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    # queue.Queue.get() ist blockierend (Thread-API) - daher
+                    # im Executor ausfuehren, damit der asyncio-Event-Loop
+                    # waehrenddessen andere Requests/Verbindungen bedienen
+                    # kann. Der Timeout sorgt dafuer, dass request.is_
+                    # disconnected() regelmaessig neu geprueft wird, auch
+                    # wenn gerade keine Events ankommen.
+                    event = await asyncio.get_running_loop().run_in_executor(
+                        None, _get_with_timeout, subscriber_queue, 15.0
+                    )
+                except queue.Empty:
+                    yield ": keep-alive\n\n"
+                    continue
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            realtime.unsubscribe(subscriber_queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # Defensiv: viele Reverse-Proxies (z.B. Nginx) puffern
+            # Streaming-Responses standardmaessig, was SSE-Events nur
+            # verzoegert oder gar nicht beim Browser ankommen liesse. Im
+            # lokalen Docker-Compose-Aufbau ruft das Frontend shop-service
+            # zwar direkt auf (kein Nginx davor, siehe frontend/nginx.conf),
+            # der Header schadet aber nicht und macht den Endpunkt auch
+            # hinter einem echten Reverse-Proxy sofort funktionsfaehig.
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _get_with_timeout(q: "queue.Queue", timeout: float):
+    """Kleiner Wrapper um Queue.get(), damit run_in_executor() sauber mit
+    dem `timeout`-Keyword-Argument statt einer positional-only-Signatur
+    umgehen kann."""
+    return q.get(timeout=timeout)
 
 
 @app.get("/admin/products", response_model=list[ProductResponse])

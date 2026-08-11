@@ -1008,17 +1008,39 @@ h2 {
 }
 
 .admin-search input,
-.admin-filter select {
+.admin-filter select,
+.admin-filter input[type="date"] {
   min-width: 0;
   width: 100%;
   border: 0;
   color: #baff6f;
   background: transparent;
   outline: 0;
+  color-scheme: dark;
 }
 
 .admin-filter span {
   color: #77c96a;
+}
+
+.live-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 2px solid #315f2d;
+  color: #77c96a;
+}
+
+.live-indicator.live {
+  border-color: #70f05b;
+  color: #70f05b;
+}
+
+.live-indicator.offline {
+  border-color: #ff8f8f;
+  color: #ff8f8f;
 }
 
 .admin-grid {
