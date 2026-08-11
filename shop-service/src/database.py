@@ -620,6 +620,7 @@ def get_order(order_id: str) -> dict[str, Any] | None:
         shipping_address AS "shippingAddress",
         billing_address AS "billingAddress",
         payment,
+        items,
         transaction_id AS "transactionId",
         invoice_id AS "invoiceId",
         invoice_status AS "invoiceStatus",
