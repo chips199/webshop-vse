@@ -728,6 +728,20 @@ def update_product(product_id: str, product: dict[str, Any]) -> dict[str, Any] |
             return cursor.fetchone()
 
 
+def delete_product(product_id: str) -> bool:
+    query = """
+    UPDATE products
+    SET active = FALSE, updated_at = now()
+    WHERE id = %s
+      AND active = TRUE
+    RETURNING id;
+    """
+    with psycopg.connect(settings.database_url, row_factory=dict_row) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(query, (product_id,))
+            return cursor.fetchone() is not None
+
+
 def enrich_items_from_products(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     product_ids = [item["productId"] for item in items]
     products = _get_products_by_ids(product_ids)

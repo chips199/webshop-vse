@@ -1335,6 +1335,27 @@ function AdminPage() {
     }
   }
 
+  async function deleteProduct(product) {
+    const confirmed = window.confirm(`Artikel "${product.name}" wirklich loeschen?`);
+    if (!confirmed) return;
+    setSavingProductId(product.id);
+    setProductError("");
+    try {
+      const response = await fetch(`${SHOP_API}/admin/products/${product.id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!response.ok) {
+        throw new Error(`Artikel konnte nicht geloescht werden: HTTP ${response.status}`);
+      }
+      await loadAdminProducts();
+    } catch (caught) {
+      setProductError(caught.message);
+    } finally {
+      setSavingProductId("");
+    }
+  }
+
   async function saveStock(productId, stockDraft) {
     setSavingProductId(productId);
     setProductError("");
@@ -1433,6 +1454,7 @@ function AdminPage() {
         <ProductAdminPanel
           error={productError}
           onCreate={createProduct}
+          onDelete={deleteProduct}
           onImageUpload={uploadProductImage}
           onReload={loadAdminProducts}
           products={products}
@@ -1505,7 +1527,7 @@ function Metric({ icon, label, tone = "", value }) {
   );
 }
 
-function ProductAdminPanel({ error, onCreate, onImageUpload, onReload, onSave, products, savingProductId }) {
+function ProductAdminPanel({ error, onCreate, onDelete, onImageUpload, onReload, onSave, products, savingProductId }) {
   const adminProductsPerPage = 5;
   const [page, setPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState("");
@@ -1574,6 +1596,7 @@ function ProductAdminPanel({ error, onCreate, onImageUpload, onReload, onSave, p
               key={product.id}
               product={product}
               saving={savingProductId === product.id}
+              onDelete={onDelete}
               onImageUpload={onImageUpload}
               onSave={onSave}
             />
@@ -1625,7 +1648,6 @@ function ProductCreateForm({ onCreate, onImageUpload, saving }) {
         <TextInput label="Jahr" value={draft.year} onChange={(value) => setDraft({ ...draft, year: value })} />
         <TextInput label="Preis" type="number" value={draft.price} onChange={(value) => setDraft({ ...draft, price: value })} />
         <TextInput label="Waehrung" value={draft.currency} onChange={(value) => setDraft({ ...draft, currency: value })} />
-        <TextInput label="Bild-URL" value={draft.imageUrl} onChange={(value) => setDraft({ ...draft, imageUrl: value })} />
         <ImageUploadField label="Bild hochladen" onUpload={handleImageUpload} uploading={uploading} />
         <TextInput label="Alt-Text" value={draft.imageAlt} onChange={(value) => setDraft({ ...draft, imageAlt: value })} />
         <TextInput
@@ -1647,7 +1669,7 @@ function ProductCreateForm({ onCreate, onImageUpload, saving }) {
   );
 }
 
-function ProductAdminRow({ onImageUpload, onSave, product, saving }) {
+function ProductAdminRow({ onDelete, onImageUpload, onSave, product, saving }) {
   const [draft, setDraft] = useState(() => productDraftFromProduct(product));
   const [uploading, setUploading] = useState(false);
 
@@ -1687,7 +1709,6 @@ function ProductAdminRow({ onImageUpload, onSave, product, saving }) {
           <TextInput label="Jahr" value={draft.year} onChange={(value) => setDraft({ ...draft, year: value })} />
           <TextInput label="Preis" type="number" value={draft.price} onChange={(value) => setDraft({ ...draft, price: value })} />
           <TextInput label="Waehrung" value={draft.currency} onChange={(value) => setDraft({ ...draft, currency: value })} />
-          <TextInput label="Bild-URL" value={draft.imageUrl} onChange={(value) => setDraft({ ...draft, imageUrl: value })} />
           <ImageUploadField label="Bild hochladen" onUpload={handleImageUpload} uploading={uploading} />
           <TextInput label="Alt-Text" value={draft.imageAlt} onChange={(value) => setDraft({ ...draft, imageAlt: value })} />
         </div>
@@ -1701,6 +1722,10 @@ function ProductAdminRow({ onImageUpload, onSave, product, saving }) {
             }}
           >
             Zuruecksetzen
+          </button>
+          <button className="danger-button" type="button" disabled={saving} onClick={() => onDelete(product)}>
+            <Trash2 size={16} />
+            Artikel loeschen
           </button>
           <button className="add-button" type="button" disabled={saving} onClick={() => onSave(product.id, draft)}>
             {saving ? "Speichert..." : "Artikel speichern"}

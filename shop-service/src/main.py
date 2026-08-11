@@ -20,6 +20,7 @@ from psycopg.errors import UniqueViolation
 
 from .config import settings
 from .database import calculate_total, create_admin_session, delete_admin_session
+from .database import delete_product as delete_product_record
 from .database import create_order as create_order_record
 from .database import create_product as create_product_record
 from .database import enrich_items_from_products, get_admin_session, get_products
@@ -737,6 +738,14 @@ async def admin_update_product(
         raise HTTPException(status_code=404, detail=f"Product {productId} not found")
     stock_by_product_id = fetch_warehouse_stock()
     return ProductResponse(**_serialize_product(updated, stock_by_product_id.get(str(updated["id"]))))
+
+
+@app.delete("/admin/products/{productId}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_delete_product(productId: str, _: str = Depends(require_admin)) -> Response:
+    deleted = delete_product_record(productId)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Product {productId} not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.patch("/admin/products/{productId}/stock", response_model=ProductResponse)

@@ -429,7 +429,8 @@ h2 {
 }
 
 .add-button,
-.secondary-button {
+.secondary-button,
+.danger-button {
   min-height: 42px;
   border: 2px solid #70f05b;
   display: inline-flex;
@@ -450,13 +451,21 @@ h2 {
   background: #071907;
 }
 
+.danger-button {
+  color: #ffdede;
+  border-color: #ff8f8f;
+  background: #2a0505;
+}
+
 .add-button:hover,
-.secondary-button:hover {
+.secondary-button:hover,
+.danger-button:hover {
   filter: brightness(1.12);
 }
 
 .add-button:disabled,
-.secondary-button:disabled {
+.secondary-button:disabled,
+.danger-button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }

@@ -241,6 +241,24 @@ paths:
           description: Admin login required
         "404":
           description: Product not found
+    delete:
+      summary: Delete an active product from the customer-facing catalog
+      security:
+        - AdminCookie: []
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Product deleted
+        "401":
+          description: Admin login required
+        "404":
+          description: Product not found
   /admin/products/{productId}/stock:
     patch:
       summary: Update warehouse stock for a product through the shop admin API
