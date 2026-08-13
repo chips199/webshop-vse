@@ -1,3 +1,13 @@
+"""Datenbankzugriff des shop-service.
+
+Groesster Service, entsprechend die meiste Datenbanklogik: Bestellungen
+(shop_orders - der "Saga-Zustand" aus Sicht von shop-service), der
+Produktkatalog (products, inkl. Seed-Daten) sowie Admin-Authentifizierung
+(admin_users/admin_sessions). Reine SQL-Wrapper-Funktionen ohne Business-
+Logik - die Saga-Entscheidungen (wann welches Event publiziert wird)
+liegen in main.py.
+"""
+
 from collections.abc import Iterable
 from datetime import datetime
 from decimal import Decimal
@@ -77,6 +87,10 @@ CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires_at
     ON admin_sessions (expires_at);
 """
 
+# Feste Produktdaten (Name, Preis, Bild-Metadaten) fuer den Katalog des
+# Webshops - historische Computerteile mit fixen UUIDs, damit sie mit
+# catalog.py und den Bestand-Seed-Daten in warehouse-service uebereinstimmen.
+# Wird bei jedem Start ueber _seed_products() erneut eingespielt (siehe dort).
 PRODUCT_SEED: list[dict[str, str]] = [
     {
         "id": "22222222-2222-2222-2222-222222222222",
@@ -394,6 +408,10 @@ PRODUCT_SEED: list[dict[str, str]] = [
 
 
 def init_database() -> None:
+    """Legt alle Tabellen/Indizes an (idempotent) und fuehrt die noetigen
+    ALTER-TABLE-Migrationen fuer spaeter hinzugekommene Spalten aus, bevor
+    Produkte und der Admin-User geseedet werden. Wird beim Start von main.py
+    (lifespan()) aufgerufen."""
     with psycopg.connect(settings.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(CREATE_ORDERS_TABLE_SQL)
@@ -435,6 +453,12 @@ def create_order(
     idempotency_key: str | None = None,
     request_hash: str | None = None,
 ) -> None:
+    """Legt eine neue Bestellung mit Status PENDING an (Start der Saga).
+
+    idempotency_key/request_hash (Bonusaufgabe 4.2) erlauben es main.py,
+    einen wiederholten POST /orders mit demselben Idempotency-Key als
+    dieselbe Bestellung zu erkennen, statt eine zweite anzulegen.
+    """
     query = """
     INSERT INTO shop_orders (
         id,
@@ -476,6 +500,9 @@ def create_order(
 
 
 def update_order_status(order_id: str, status: str) -> None:
+    """Setzt den Saga-Status einer Bestellung direkt (fuer alle Zwischen-/
+    Endzustaende, die keine weiteren Felder mitbringen, z.B. CANCELLED,
+    ORDER_REJECTED, INVOICE_FAILED)."""
     query = """
     UPDATE shop_orders
     SET status = %s, updated_at = now()
@@ -487,6 +514,9 @@ def update_order_status(order_id: str, status: str) -> None:
 
 
 def update_payment_action_required(order_id: str, transaction_id: str, redirect_url: str) -> None:
+    """Markiert die Bestellung als wartend auf externe Zahlungsbestaetigung
+    (z.B. PayPal/Stripe-Redirect) und speichert die dafuer noetige
+    transaction_id sowie die Redirect-URL fuer das Frontend."""
     query = """
     UPDATE shop_orders
     SET status = %s, transaction_id = %s, payment_redirect_url = %s, updated_at = now()
@@ -503,12 +533,15 @@ def update_payment_succeeded(
     customer: dict[str, Any] | None = None,
     shipping_address: dict[str, Any] | None = None,
 ) -> None:
-    # customer/shipping_address kommen nur befuellt an, wenn der Kaeufer sie
-    # auf der echten Stripe-/PayPal-Sandbox-Seite eingegeben hat (siehe
-    # billing-service PaymentResult.customer/shipping_address). COALESCE
-    # sorgt dafuer, dass ohne solche Daten (z.B. lokaler Stub-Modus ohne
-    # Sandbox-Credentials) die im Checkout-Formular erfassten Werte stehen
-    # bleiben, statt mit NULL ueberschrieben zu werden.
+    """Markiert die Bestellung als bezahlt und speichert die transaction_id.
+
+    customer/shipping_address kommen nur befuellt an, wenn der Kaeufer sie
+    auf der echten Stripe-/PayPal-Sandbox-Seite eingegeben hat (siehe
+    billing-service PaymentResult.customer/shipping_address). COALESCE
+    sorgt dafuer, dass ohne solche Daten (z.B. lokaler Stub-Modus ohne
+    Sandbox-Credentials) die im Checkout-Formular erfassten Werte stehen
+    bleiben, statt mit NULL ueberschrieben zu werden.
+    """
     query = """
     UPDATE shop_orders
     SET status = %s,
@@ -533,6 +566,7 @@ def update_payment_succeeded(
 
 
 def update_invoice_created(order_id: str, invoice_id: str) -> None:
+    """Verknuepft die Bestellung mit der erzeugten Rechnung (invoice.created)."""
     query = """
     UPDATE shop_orders
     SET invoice_id = %s, invoice_status = %s, updated_at = now()
@@ -544,6 +578,7 @@ def update_invoice_created(order_id: str, invoice_id: str) -> None:
 
 
 def update_warehouse_commit(order_id: str, commit_status: str) -> None:
+    """Speichert das Ergebnis des finalen Lager-Commits (warehouse.commit.*)."""
     query = """
     UPDATE shop_orders
     SET warehouse_commit_status = %s, updated_at = now()
@@ -590,6 +625,15 @@ def claim_payment_confirmation(order_id: str) -> bool:
 
 
 def complete_order_if_ready(order_id: str) -> bool:
+    """Schliesst die Bestellung ab (COMPLETED), aber NUR wenn alle drei
+    Saga-Zweige erfolgreich durch sind: Zahlung bestaetigt (transaction_id
+    gesetzt), Rechnung erzeugt (invoice_status = CREATED) und Lagerbestand
+    final committed (warehouse_commit_status = SUCCEEDED). Da diese drei
+    Events asynchron und in beliebiger Reihenfolge eintreffen koennen, wird
+    diese Funktion nach JEDEM der drei Teilschritte erneut aufgerufen (siehe
+    main.py) - die WHERE-Bedingung macht das Ergebnis unabhaengig von der
+    Aufrufreihenfolge und verhindert per `status <> 'COMPLETED'` einen
+    doppelten Abschluss."""
     query = """
     UPDATE shop_orders
     SET status = %s, updated_at = now()
@@ -607,6 +651,7 @@ def complete_order_if_ready(order_id: str) -> bool:
 
 
 def get_order(order_id: str) -> dict[str, Any] | None:
+    """Liest eine einzelne Bestellung mit allen Feldern (fuer GET /orders/{id})."""
     query = """
     SELECT
         id AS "orderId",
@@ -636,6 +681,10 @@ def get_order(order_id: str) -> dict[str, Any] | None:
 
 
 def get_order_by_idempotency_key(idempotency_key: str) -> dict[str, Any] | None:
+    """Sucht eine bereits angelegte Bestellung anhand ihres Idempotency-Keys
+    (Bonusaufgabe 4.2) - main.py nutzt das, um einen wiederholten POST
+    /orders mit demselben Key als Duplikat zu erkennen statt eine zweite
+    Bestellung anzulegen."""
     query = """
     SELECT
         id AS "orderId",
@@ -655,6 +704,8 @@ def get_order_by_idempotency_key(idempotency_key: str) -> dict[str, Any] | None:
 
 
 def get_orders_by_correlation_id(correlation_id: str) -> Iterable[dict[str, Any]]:
+    """Liest alle Bestellungen zu einer correlationId (i.d.R. genau eine -
+    wird u.a. fuer die Audit-Timeline im Admin-Dashboard genutzt)."""
     query = """
     SELECT
         id AS "orderId",
@@ -677,6 +728,8 @@ def get_orders_by_correlation_id(correlation_id: str) -> Iterable[dict[str, Any]
 
 
 def get_products() -> list[dict[str, Any]]:
+    """Liefert alle aktiven Produkte fuer den Katalog (GET /products), sortiert
+    nach Baujahr und Name."""
     query = """
     SELECT
         id,
@@ -701,6 +754,7 @@ def get_products() -> list[dict[str, Any]]:
 
 
 def create_product(product_id: str, product: dict[str, Any]) -> dict[str, Any]:
+    """Legt ein neues Produkt an (Admin-Dashboard: Produktverwaltung)."""
     query = """
     INSERT INTO products (
         id,
@@ -752,6 +806,8 @@ def create_product(product_id: str, product: dict[str, Any]) -> dict[str, Any]:
 
 
 def update_product(product_id: str, product: dict[str, Any]) -> dict[str, Any] | None:
+    """Aktualisiert ein bestehendes, aktives Produkt; gibt None zurueck, falls
+    die ID nicht existiert oder das Produkt bereits deaktiviert wurde."""
     query = """
     UPDATE products
     SET
@@ -803,6 +859,10 @@ def update_product(product_id: str, product: dict[str, Any]) -> dict[str, Any] |
 
 
 def enrich_items_from_products(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Berechnet Name/Stueckpreis/Zeilensumme je Bestellposition serverseitig
+    aus der products-Tabelle (NIE aus Client-Angaben - verhindert
+    Preismanipulation, siehe Aufgabenblatt 5.2). Wirft ValueError, falls eine
+    productId nicht (mehr) im aktiven Katalog existiert."""
     product_ids = [item["productId"] for item in items]
     products = _get_products_by_ids(product_ids)
     enriched = []
@@ -825,10 +885,14 @@ def enrich_items_from_products(items: list[dict[str, Any]]) -> list[dict[str, An
 
 
 def calculate_total(items: list[dict[str, Any]]) -> Decimal:
+    """Summiert die (bereits serverseitig berechneten) Zeilensummen zum
+    Gesamtbetrag der Bestellung."""
     return sum((Decimal(item["lineTotal"]) for item in items), Decimal("0.00"))
 
 
 def list_admin_orders(limit: int = 50) -> list[dict[str, Any]]:
+    """Liefert die neuesten Bestellungen fuer die Admin-Dashboard-Uebersicht
+    (Zeitraum-Filterung passiert im Frontend/main.py, nicht hier)."""
     query = """
     SELECT
         id AS "orderId",
@@ -858,6 +922,12 @@ def list_admin_orders(limit: int = 50) -> list[dict[str, Any]]:
 
 
 def get_audit_snapshots_for_order(order_id: str) -> list[dict[str, Any]]:
+    """Liest die Audit-Timeline direkt per SQL aus der audit_snapshots-Tabelle.
+
+    HINWEIS: main.py nutzt fuer die Admin-Timeline stattdessen
+    fetch_audit_snapshots() (HTTP-Aufruf an audit-service, siehe dort) statt
+    dieser Funktion, um den "kein Service liest fremde Tabellen"-Grundsatz
+    einzuhalten - diese Funktion bleibt als Altlast/Alternative bestehen."""
     order = get_order(order_id)
     if order is None:
         return []
@@ -883,6 +953,12 @@ def get_audit_snapshots_for_order(order_id: str) -> list[dict[str, Any]]:
 
 
 def verify_admin_credentials(username: str, password: str) -> bool:
+    """Prueft Admin-Login-Daten gegen den gespeicherten PBKDF2-Hash.
+
+    hmac.compare_digest() statt "==" fuer den Hash-Vergleich verhindert
+    Timing-Angriffe (konstante Vergleichszeit unabhaengig davon, an welcher
+    Stelle die Hashes voneinander abweichen).
+    """
     query = """
     SELECT password_hash, password_salt
     FROM admin_users
@@ -900,6 +976,9 @@ def verify_admin_credentials(username: str, password: str) -> bool:
 
 
 def create_admin_session(token_hash: str, username: str, expires_at: datetime) -> None:
+    """Speichert eine neue Admin-Session anhand ihres Token-HASHES (nicht des
+    Klartext-Tokens - selbst bei DB-Zugriff laesst sich damit kein gueltiges
+    Session-Cookie faelschen)."""
     query = """
     INSERT INTO admin_sessions (token_hash, username, expires_at)
     VALUES (%s, %s, %s);
@@ -910,6 +989,9 @@ def create_admin_session(token_hash: str, username: str, expires_at: datetime) -
 
 
 def get_admin_session(token_hash: str) -> dict[str, Any] | None:
+    """Liest eine Admin-Session anhand ihres Token-Hashes, aber NUR wenn sie
+    noch nicht abgelaufen ist (expires_at > now() direkt in der WHERE-Klausel,
+    kein separater Ablauf-Check in Python noetig)."""
     query = """
     SELECT username, expires_at AS "expiresAt"
     FROM admin_sessions
@@ -923,12 +1005,17 @@ def get_admin_session(token_hash: str) -> dict[str, Any] | None:
 
 
 def delete_admin_session(token_hash: str) -> None:
+    """Loescht eine Admin-Session (Logout)."""
     with psycopg.connect(settings.database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute("DELETE FROM admin_sessions WHERE token_hash = %s;", (token_hash,))
 
 
 def _get_products_by_ids(product_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Helfer fuer enrich_items_from_products(): liest mehrere Produkte in
+    einer Abfrage (ANY(%s::uuid[])) und liefert sie als Dict productId ->
+    Produkt, damit sie pro Bestellposition ohne weitere DB-Roundtrips
+    nachgeschlagen werden koennen."""
     query = """
     SELECT id, name, price, currency
     FROM products
@@ -943,6 +1030,11 @@ def _get_products_by_ids(product_ids: list[str]) -> dict[str, dict[str, Any]]:
 
 
 def _seed_products(cursor) -> None:
+    """Spielt PRODUCT_SEED bei jedem Start ein - ON CONFLICT DO UPDATE
+    aktualisiert nur die Bild-Metadaten und setzt active=TRUE wieder, laesst
+    Preis/Name/Beschreibung eines bereits bestehenden Eintrags aber
+    unangetastet (damit Admin-Aenderungen an bestehenden Produkten einen
+    Neustart ueberleben)."""
     query = """
     INSERT INTO products (
         id,
@@ -987,6 +1079,11 @@ def _seed_products(cursor) -> None:
 
 
 def _seed_admin_user(cursor) -> None:
+    """Legt den konfigurierten Admin-Account einmalig an (nicht ON CONFLICT-
+    basiert wie bei den Produkten, sondern expliziter Existenz-Check davor -
+    verhindert, dass ein bereits per Admin-Dashboard geaendertes Passwort bei
+    jedem Neustart wieder auf admin_password aus der Konfiguration
+    zurueckgesetzt wird)."""
     cursor.execute("SELECT 1 FROM admin_users WHERE username = %s;", (settings.admin_username,))
     if cursor.fetchone() is not None:
         return
@@ -1001,6 +1098,9 @@ def _seed_admin_user(cursor) -> None:
 
 
 def _hash_password(password: str, salt: str) -> str:
+    """Leitet einen PBKDF2-HMAC-SHA256-Hash mit 210.000 Iterationen aus
+    Passwort+Salt ab (OWASP-Empfehlung fuer PBKDF2-SHA256, Stand der
+    Erstellung) - deutlich sicherer als ein reines SHA256(password)."""
     return hashlib.pbkdf2_hmac(
         "sha256",
         password.encode("utf-8"),

@@ -1,3 +1,16 @@
+"""FastAPI-Einstiegspunkt des shop-service.
+
+Groesster und "zentralster" Service der Choreografie: legt Bestellungen an,
+konsumiert praktisch alle Saga-Events der anderen Services (siehe
+handle_saga_message()) und entscheidet dabei jeweils, welches naechste
+Command/Event zu publizieren ist - OHNE dass es einen zentralen
+Orchestrator gibt (jeder Service kennt nur seinen eigenen naechsten
+Schritt). Enthaelt ausserdem den Produktkatalog-/Bestand-Proxy, das
+Admin-Dashboard-Backend (Login, Bestelluebersicht, Produktverwaltung,
+Echtzeit-Updates per SSE) und den Circuit Breaker fuer den
+Invoice-Service-Aufruf (Bonusaufgabe 4.1).
+"""
+
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -55,6 +68,17 @@ invoice_circuit_breaker = CircuitBreaker(
 
 
 def handle_saga_message(message: dict) -> None:
+    """Zentraler Verteiler fuer alle eingehenden Saga-Events (Choreografie).
+
+    shop-service konsumiert praktisch jedes Event, das die anderen Services
+    publizieren, und entscheidet hier - abhaengig vom message_type - was als
+    naechstes zu tun ist (naechstes Command publizieren, Bestellstatus
+    aktualisieren, oder beides). Jeder Zweig endet mit `return`, sobald er
+    fertig ist. Reihenfolge der Zweige entspricht grob dem Happy-Path-Ablauf
+    der Saga; Fehler-/Kompensationszweige (z.B. billing.payment.failed,
+    warehouse.commit.failed) stossen jeweils die passende
+    Rueckabwicklung an.
+    """
     message_type = message["type"]
     payload = message.get("payload", {})
     correlation_id = message["correlationId"]
@@ -251,6 +275,11 @@ def notify_admin_dashboard(order_id: str | None, correlation_id: str | None, rea
 
 
 def maybe_publish_order_completed(order_id: str, correlation_id: str, previous_message: dict) -> None:
+    """Prueft, ob alle drei Saga-Zweige (Zahlung/Rechnung/Lager) fertig sind,
+    und publiziert order.completed nur dann - siehe complete_order_if_ready()
+    in database.py fuer die eigentliche (atomare) Bedingung. Wird nach JEDEM
+    der drei moeglichen Abschluss-Events aufgerufen (invoice.created,
+    warehouse.commit.succeeded), da die Reihenfolge nicht feststeht."""
     if not complete_order_if_ready(order_id):
         return
     order_completed = build_message(
@@ -377,6 +406,11 @@ def publish_invoice_circuit_transition(
     transition,
     previous_event_id: str,
 ) -> None:
+    """Meldet eine CircuitTransition (falls vorhanden) als eigenes Event, damit
+    Zustandswechsel des Invoice-Circuit-Breakers ueber die Audit-Snapshots
+    nachvollziehbar sind. `transition` ist None, wenn before_call()/
+    record_success()/record_failure() keinen Zustandswechsel ausgeloest
+    haben - dann wird bewusst nichts publiziert."""
     if transition is None:
         return
     event = build_message(
@@ -397,6 +431,13 @@ def publish_invoice_circuit_transition(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Startet/stoppt den RabbitMQ-Consumer im Gleichschritt mit der App.
+
+    Bindet beim Start den Consumer-Thread an alle Routing-Keys, die fuer die
+    Shop-Saga relevant sind (siehe handle_saga_message()). Beim Shutdown
+    wird stop_consumer_event gesetzt und dem Thread bis zu 3s Zeit gegeben,
+    sauber zu beenden.
+    """
     global consumer_thread
     init_database()
     stop_consumer_event.clear()
@@ -431,12 +472,19 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Historical Computer Parts Shop API", version="0.1.0", lifespan=lifespan)
+# Registriert die RFC-7807-konformen Fehler-Handler (siehe problem_details.py).
 register_problem_handlers(app)
+# Stellt hochgeladene Produktbilder (siehe admin_upload_product_image()) unter
+# /product-images/... als statische Dateien bereit.
 app.mount(
     "/product-images",
     StaticFiles(directory=settings.product_image_upload_dir, check_dir=False),
     name="uploaded-product-images",
 )
+# CORS: nur das lokale Frontend (Dev-Server) darf Cross-Origin-Requests
+# stellen; allow_credentials=True ist noetig, damit das Admin-Session-Cookie
+# bei Cross-Origin-Aufrufen mitgeschickt wird. expose_headers macht
+# X-Correlation-Id im Browser (z.B. fuer Debugging) lesbar.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
@@ -450,11 +498,17 @@ ADMIN_SESSION_COOKIE = "admin_session"
 
 
 class HealthResponse(BaseModel):
+    """Antwort des /health-Endpunkts (fuer Docker-Healthchecks/Monitoring)."""
+
     status: str = "ok"
     service: str
 
 
 class OrderItem(BaseModel):
+    """Eine rohe Bestellposition aus dem Checkout-Request (nur productId +
+    Menge - Preise werden serverseitig nachgeschlagen, siehe
+    enrich_items_from_products())."""
+
     productId: str
     quantity: int = Field(ge=1)
 
@@ -475,6 +529,11 @@ class Address(BaseModel):
 
 
 class PaymentSelection(BaseModel):
+    """Zahlungsauswahl aus dem Checkout - `scenario` steuert das im
+    Aufgabenblatt geforderte gezielte Durchspielen von Testszenarien
+    (happy_path, warehouse_commit_failed, out_of_stock, ...) end-to-end
+    durch die ganze Saga."""
+
     provider: str
     currency: str = "EUR"
     scenario: str = "happy_path"
@@ -488,6 +547,8 @@ class PaymentSelection(BaseModel):
 
 
 class CreateOrderRequest(BaseModel):
+    """Body fuer POST /orders (Checkout-Formular)."""
+
     customerId: str | None = None
     customer: Customer
     shippingAddress: Address
@@ -497,6 +558,10 @@ class CreateOrderRequest(BaseModel):
 
 
 class ProductResponse(BaseModel):
+    """Produkt inkl. optionaler Lagerbestand-Felder (None/UNKNOWN, falls
+    warehouse-service beim Aufruf nicht erreichbar war, siehe
+    fetch_warehouse_stock())."""
+
     id: str
     name: str
     year: str
@@ -516,6 +581,8 @@ class ProductResponse(BaseModel):
 
 
 class ProductUpdateRequest(BaseModel):
+    """Body fuer PUT /admin/products/{productId}."""
+
     name: str = Field(min_length=1)
     year: str = Field(min_length=1)
     description: str = Field(min_length=1)
@@ -529,16 +596,24 @@ class ProductUpdateRequest(BaseModel):
 
 
 class ProductCreateRequest(ProductUpdateRequest):
+    """Body fuer POST /admin/products - erweitert ProductUpdateRequest um die
+    initialen Lagerbestand-Felder, die beim Anlegen zusaetzlich an
+    warehouse-service durchgereicht werden (siehe admin_create_product())."""
+
     quantityOnHand: int = Field(default=0, ge=0)
     location: str | None = "RETRO-A1"
 
 
 class StockUpdateRequest(BaseModel):
+    """Body fuer PATCH /admin/products/{productId}/stock."""
+
     quantityOnHand: int = Field(ge=0)
     location: str | None = None
 
 
 class OrderResponse(BaseModel):
+    """Oeffentliche Sicht auf eine Bestellung (GET/POST /orders/...)."""
+
     orderId: str
     correlationId: str
     status: str
@@ -551,6 +626,9 @@ class OrderResponse(BaseModel):
 
 
 class PaymentConfirmationRequest(BaseModel):
+    """Body fuer POST /orders/{orderId}/payment-confirmation (Kunde bestaetigt
+    oder storniert eine externe Zahlung, z.B. nach PayPal-Redirect)."""
+
     outcome: Literal["approved", "cancelled"]
 
 
@@ -565,6 +643,9 @@ class AdminSessionResponse(BaseModel):
 
 
 class AdminOrderResponse(BaseModel):
+    """Vollstaendige Bestellsicht fuer das Admin-Dashboard (mehr Felder als
+    OrderResponse, u.a. items/payment/Zeitstempel fuer die Uebersichtstabelle)."""
+
     orderId: str
     correlationId: str
     status: str
@@ -584,6 +665,9 @@ class AdminOrderResponse(BaseModel):
 
 
 class AdminAuditResponse(BaseModel):
+    """Antwort von GET /admin/orders/{orderId}/audit - die vollstaendige
+    Audit-Snapshot-Timeline einer Bestellung ueber alle Services hinweg."""
+
     orderId: str
     snapshots: list[dict]
 
@@ -594,10 +678,16 @@ class ImageUploadResponse(BaseModel):
 
 
 def _token_hash(token: str) -> str:
+    """Hasht ein Admin-Session-Token fuer den Datenbankvergleich - siehe
+    create_admin_session()/get_admin_session() in database.py: gespeichert
+    wird nie das Klartext-Token."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 async def require_admin(request: Request) -> str:
+    """FastAPI-Dependency: prueft das Admin-Session-Cookie und liefert den
+    eingeloggten Benutzernamen, sonst 401. In allen /admin/*-Endpunkten per
+    `Depends(require_admin)` eingebunden."""
     token = request.cookies.get(ADMIN_SESSION_COOKIE)
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin login required")
@@ -609,6 +699,8 @@ async def require_admin(request: Request) -> str:
 
 @app.middleware("http")
 async def correlation_id_middleware(request: Request, call_next):
+    """Liest X-Correlation-Id aus eingehenden Requests oder erzeugt eine neue,
+    haengt sie an die Response an (Aufgabenblatt 3.3/9.3)."""
     correlation_id = request.headers.get("X-Correlation-Id") or str(uuid4())
     request.state.correlation_id = correlation_id
     response: Response = await call_next(request)
@@ -623,6 +715,8 @@ async def health() -> HealthResponse:
 
 @app.get("/products", response_model=list[ProductResponse])
 async def list_products(request: Request, response: Response) -> list[ProductResponse]:
+    """Oeffentlicher Produktkatalog inkl. Live-Lagerbestand (No-Store-Cache,
+    damit Verfuegbarkeitsstatus nie veraltet aus dem Browser-Cache kommt)."""
     response.headers["Cache-Control"] = "no-store"
     stock_by_product_id = fetch_warehouse_stock(request.state.correlation_id)
     return [
@@ -633,6 +727,16 @@ async def list_products(request: Request, response: Response) -> list[ProductRes
 
 @app.post("/orders", response_model=OrderResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_order(request: Request, order: CreateOrderRequest) -> OrderResponse:
+    """Startet die Saga: legt die Bestellung an (Status PENDING) und
+    publiziert order.created sowie den ersten Saga-Schritt
+    (warehouse.reserve.requested). 202 Accepted statt 201/200, da die
+    Verarbeitung danach vollstaendig asynchron ueber RabbitMQ weiterlaeuft.
+
+    idempotency_key/request_hash (Bonusaufgabe 4.2): ist ein Idempotency-Key-
+    Header gesetzt und wurde er schon einmal fuer denselben Request-Body
+    verwendet, wird die bereits angelegte Bestellung zurueckgegeben statt
+    eine zweite anzulegen; bei gleichem Key aber anderem Body gibt es 409.
+    """
     correlation_id = request.state.correlation_id
     idempotency_key = _idempotency_key_from_request(request)
     request_hash = _request_hash(order)
@@ -672,6 +776,13 @@ async def create_order(request: Request, order: CreateOrderRequest) -> OrderResp
             request_hash,
         )
     except UniqueViolation as exc:
+        # Race Condition: zwei parallele Requests mit demselben Idempotency-
+        # Key haben den Vorab-Check oben beide "nicht gefunden" gesehen und
+        # versuchen nun gleichzeitig, die Bestellung anzulegen - der
+        # eindeutige Index auf idempotency_key (siehe database.py) laesst
+        # nur den ersten INSERT durch. Statt den Fehler durchzureichen, wird
+        # hier die (vom parallelen Request inzwischen angelegte) Bestellung
+        # nachgeladen und wie ein normaler Idempotenz-Treffer behandelt.
         if not idempotency_key:
             raise
         existing_order = get_order_by_idempotency_key(idempotency_key)
@@ -733,6 +844,8 @@ async def create_order(request: Request, order: CreateOrderRequest) -> OrderResp
 
 @app.get("/orders/{orderId}", response_model=OrderResponse)
 async def get_order(orderId: str) -> OrderResponse:
+    """Liefert den aktuellen Saga-/Bestellstatus (Frontend pollt diesen
+    Endpunkt waehrend der asynchronen Verarbeitung)."""
     order = get_order_record(orderId)
     if not order:
         raise HTTPException(status_code=404, detail=f"Order {orderId} not found")
@@ -741,6 +854,11 @@ async def get_order(orderId: str) -> OrderResponse:
 
 @app.post("/orders/{orderId}/payment-confirmation", response_model=OrderResponse, status_code=status.HTTP_202_ACCEPTED)
 async def confirm_order_payment(orderId: str, confirmation: PaymentConfirmationRequest) -> OrderResponse:
+    """Kunde bestaetigt oder storniert eine ausstehende externe Zahlung
+    (z.B. nach Rueckkehr von einer PayPal-Sandbox-Seite). Bei "approved"
+    wird billing.payment.confirm.requested publiziert (billing-service
+    fuehrt dann den eigentlichen Capture durch), bei "cancelled" direkt die
+    Warehouse-Reservierung storniert."""
     order = get_order_record(orderId)
     if not order:
         raise HTTPException(status_code=404, detail=f"Order {orderId} not found")
@@ -793,6 +911,8 @@ async def confirm_order_payment(orderId: str, confirmation: PaymentConfirmationR
 
 
 def _idempotency_key_from_request(request: Request) -> str | None:
+    """Liest und validiert den optionalen Idempotency-Key-Header (Bonusaufgabe
+    4.2). None, falls der Header fehlt; 400, falls er leer oder zu lang ist."""
     value = request.headers.get("Idempotency-Key")
     if value is None:
         return None
@@ -805,11 +925,16 @@ def _idempotency_key_from_request(request: Request) -> str | None:
 
 
 def _request_hash(order: CreateOrderRequest) -> str:
+    """Bildet einen stabilen Hash ueber den Request-Body (sortierte Keys,
+    kompakte Trennzeichen) - dient dazu, bei Wiederverwendung eines
+    Idempotency-Keys zu erkennen, ob es sich um denselben oder einen
+    fachlich abweichenden Request handelt (siehe create_order())."""
     canonical = json.dumps(order.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _order_response(order: dict) -> OrderResponse:
+    """Serialisiert einen DB-Bestelldatensatz zur oeffentlichen OrderResponse."""
     return OrderResponse(
         orderId=str(order["orderId"]),
         correlationId=str(order["correlationId"]),
@@ -824,6 +949,11 @@ def _order_response(order: dict) -> OrderResponse:
 
 
 def _initial_order_response(order: dict) -> OrderResponse:
+    """Wie _order_response(), aber fuer den Idempotenz-Kurzschluss in
+    create_order(): dort liegen nur wenige Felder vor (der DB-Datensatz aus
+    get_order_by_idempotency_key() enthaelt nicht alle OrderResponse-Felder),
+    daher der bewusst simplere Status "PENDING" statt des tatsaechlichen
+    aktuellen Status."""
     return OrderResponse(
         orderId=str(order["orderId"]),
         correlationId=str(order["correlationId"]),
@@ -835,6 +965,9 @@ def _initial_order_response(order: dict) -> OrderResponse:
 
 @app.post("/admin/login", response_model=AdminSessionResponse)
 async def admin_login(credentials: AdminLoginRequest, response: Response) -> AdminSessionResponse:
+    """Prueft Admin-Zugangsdaten und setzt bei Erfolg ein httpOnly-
+    Session-Cookie (siehe require_admin() fuer die Pruefung auf den
+    folgenden Requests)."""
     if not verify_admin_credentials(credentials.username, credentials.password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
     token = secrets.token_urlsafe(32)
@@ -854,6 +987,7 @@ async def admin_login(credentials: AdminLoginRequest, response: Response) -> Adm
 
 @app.post("/admin/logout", response_model=AdminSessionResponse)
 async def admin_logout(request: Request, response: Response) -> AdminSessionResponse:
+    """Loescht die Server-seitige Session sowie das Cookie."""
     token = request.cookies.get(ADMIN_SESSION_COOKIE)
     if token:
         delete_admin_session(_token_hash(token))
@@ -863,16 +997,23 @@ async def admin_logout(request: Request, response: Response) -> AdminSessionResp
 
 @app.get("/admin/session", response_model=AdminSessionResponse)
 async def admin_session(username: str = Depends(require_admin)) -> AdminSessionResponse:
+    """Erlaubt dem Frontend zu pruefen, ob eine bestehende Session noch
+    gueltig ist (z.B. beim Neuladen der Admin-Seite)."""
     return AdminSessionResponse(authenticated=True, username=username)
 
 
 @app.get("/admin/orders", response_model=list[AdminOrderResponse])
 async def admin_orders(_: str = Depends(require_admin)) -> list[AdminOrderResponse]:
+    """Bestelluebersicht fuer das Admin-Dashboard (neueste zuerst, siehe
+    list_admin_orders())."""
     return [AdminOrderResponse(**_serialize_order(order)) for order in list_admin_orders()]
 
 
 @app.get("/admin/orders/{orderId}/audit", response_model=AdminAuditResponse)
 async def admin_order_audit(orderId: str, _: str = Depends(require_admin)) -> AdminAuditResponse:
+    """Liefert die vollstaendige Audit-Snapshot-Timeline einer Bestellung
+    ueber alle Services hinweg (per HTTP-Aufruf an audit-service, siehe
+    fetch_audit_snapshots())."""
     order = get_order_record(orderId)
     if not order:
         raise HTTPException(status_code=404, detail=f"Order {orderId} not found")
@@ -951,6 +1092,8 @@ def _get_with_timeout(q: "queue.Queue", timeout: float):
 
 @app.get("/admin/products", response_model=list[ProductResponse])
 async def admin_products(request: Request, _: str = Depends(require_admin)) -> list[ProductResponse]:
+    """Wie /products, aber hinter Admin-Login (Basis fuer die
+    Produktverwaltung im Dashboard)."""
     stock_by_product_id = fetch_warehouse_stock(request.state.correlation_id)
     return [
         ProductResponse(**_serialize_product(product, stock_by_product_id.get(str(product["id"]))))
@@ -963,6 +1106,15 @@ async def admin_upload_product_image(
     file: UploadFile = File(...),
     _: str = Depends(require_admin),
 ) -> ImageUploadResponse:
+    """Nimmt ein Produktbild entgegen, validiert Typ/Groesse und speichert es
+    unter einem sicheren, kollisionsfreien Dateinamen im Upload-Verzeichnis.
+
+    Der Dateiname wird NIE 1:1 vom Original-Upload uebernommen: der Stem wird
+    auf a-z0-9/Bindestrich normalisiert (verhindert Path-Traversal/
+    Sonderzeichen-Probleme) und um ein zufaelliges Suffix ergaenzt
+    (verhindert, dass zwei Uploads mit gleichem Namen sich gegenseitig
+    ueberschreiben).
+    """
     content_types = {
         "image/png": ".png",
         "image/jpeg": ".jpg",
@@ -990,6 +1142,10 @@ async def admin_create_product(
     product: ProductCreateRequest,
     _: str = Depends(require_admin),
 ) -> ProductResponse:
+    """Legt ein neues Produkt UND (in einem zweiten Schritt) den zugehoerigen
+    initialen Lagerbestand in warehouse-service an - zwei separate
+    Datenbanken (product_id existiert erst nach dem ersten Aufruf), daher
+    kein gemeinsamer Transaktionsrahmen."""
     product_id = str(uuid4())
     product_payload = product.model_dump(exclude={"quantityOnHand", "location"})
     created = create_product_record(product_id, product_payload)
@@ -1011,6 +1167,8 @@ async def admin_update_product(
     product: ProductUpdateRequest,
     _: str = Depends(require_admin),
 ) -> ProductResponse:
+    """Aktualisiert die Stammdaten (Name/Preis/Bild/...) eines Produkts.
+    Beruehrt NICHT den Lagerbestand - dafuer siehe admin_update_product_stock()."""
     updated = update_product_record(productId, product.model_dump())
     if updated is None:
         raise HTTPException(status_code=404, detail=f"Product {productId} not found")
@@ -1025,6 +1183,9 @@ async def admin_update_product_stock(
     stock: StockUpdateRequest,
     _: str = Depends(require_admin),
 ) -> ProductResponse:
+    """Aktualisiert nur den Lagerbestand (Menge/Lagerort) eines Produkts -
+    delegiert an warehouse-service, das die eigentliche Bestandstabelle
+    haelt (shop-service besitzt keine eigenen Bestandsdaten)."""
     update_warehouse_stock(productId, stock.model_dump(), request.state.correlation_id)
     product = next((entry for entry in get_products() if str(entry["id"]) == productId), None)
     if product is None:
@@ -1034,6 +1195,10 @@ async def admin_update_product_stock(
 
 
 def _serialize_product(product: dict, stock: dict | None = None) -> dict:
+    """Kombiniert Produkt-Stammdaten (aus shop-service-DB) mit Bestandsdaten
+    (aus warehouse-service) zu einem ProductResponse-Dict. Ohne Bestandsdaten
+    (warehouse-service nicht erreichbar) bleibt stockStatus "UNKNOWN" statt
+    faelschlich "verfuegbar" oder "nicht verfuegbar" zu behaupten."""
     serialized = {
         **product,
         "id": str(product["id"]),
@@ -1053,6 +1218,8 @@ def _serialize_product(product: dict, stock: dict | None = None) -> dict:
 
 
 def _serialize_order(order: dict) -> dict:
+    """Wandelt DB-spezifische Typen (UUID-Objekte) der Admin-Bestellsicht in
+    Strings um, wie sie AdminOrderResponse erwartet."""
     return {
         **order,
         "orderId": str(order["orderId"]),
@@ -1063,6 +1230,11 @@ def _serialize_order(order: dict) -> dict:
 
 
 def _serialize_snapshot(snapshot: dict) -> dict:
+    """Waere das Gegenstueck zu _serialize_order() fuer Audit-Snapshots (UUID/
+    Zeitstempel-Konvertierung). HINWEIS: aktuell ungenutzt, da
+    admin_order_audit() die bereits fertig serialisierten Snapshots per
+    fetch_audit_snapshots() (HTTP-JSON von audit-service) bezieht statt
+    diese Funktion auf ein DB-Ergebnis anzuwenden."""
     return {
         **snapshot,
         "id": str(snapshot["id"]),
@@ -1073,6 +1245,9 @@ def _serialize_snapshot(snapshot: dict) -> dict:
 
 
 def fetch_audit_snapshots(correlation_id: str) -> list[dict]:
+    """Holt die Audit-Timeline synchron per HTTP von audit-service (statt
+    direkt aus dessen Tabelle zu lesen, siehe get_audit_snapshots_for_order()
+    in database.py). 502, falls audit-service nicht erreichbar ist."""
     url = f"{settings.audit_service_url.rstrip('/')}/audit/orders/{correlation_id}"
     request = UrlRequest(url, headers={"X-Correlation-Id": correlation_id})
     try:

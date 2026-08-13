@@ -1,3 +1,12 @@
+"""RabbitMQ-Anbindung des invoice-service.
+
+Enthaelt alles, was mit dem Nachrichten-Broker zu tun hat: Verbindungsaufbau
+mit Retry, Event-Umschlag (build_message), Publizieren (publish_message) und
+den Consumer-Loop (consume_messages), der eingehende Commands an einen
+Handler weiterreicht. Fachlicher Code (main.py) importiert nur diese
+Funktionen und muss sich nie direkt mit pika beschaeftigen.
+"""
+
 import json
 import logging
 import threading
@@ -12,7 +21,10 @@ import pika.exceptions
 
 from .config import settings
 
+# Topic-Exchange, ueber den alle Services ihre Events/Commands austauschen.
 EXCHANGE_NAME = "webshop.events"
+# Queue, an die genau die fuer invoice-service relevanten Routing-Keys
+# gebunden werden (siehe consume_messages()-Aufruf in main.py).
 INVOICE_QUEUE_NAME = "invoice-service.commands"
 
 logger = logging.getLogger(__name__)
@@ -34,6 +46,14 @@ def build_message(
         payload: dict[str, Any],
         previous_event_id: str | None = None,
 ) -> dict[str, Any]:
+    """Baut den einheitlichen Nachrichten-Umschlag fuer Events/Commands.
+
+    Jede Nachricht bekommt eine eigene messageId, die Absender-Kennung
+    (sourceService) und einen Zeitstempel automatisch mit - der Aufrufer
+    liefert nur noch type, correlationId und die fachliche payload.
+    previousEventId verknuepft die Nachricht mit dem Ereignis, das sie
+    ausgeloest hat (fuer Nachvollziehbarkeit/Audit-Trail).
+    """
     return {
         "messageId": str(uuid4()),
         "correlationId": correlation_id,
@@ -123,6 +143,15 @@ def consume_messages(
         handle_message: Callable[[dict[str, Any]], None],
         stop_event: threading.Event,
 ) -> None:
+    """Konsumiert dauerhaft Nachrichten fuer die gegebenen Routing-Keys.
+
+    Blockierend - gedacht zum Laufen in einem eigenen Thread (siehe
+    lifespan() in main.py). Fuer jede empfangene Nachricht wird
+    `handle_message(payload)` aufgerufen; wirft der Handler eine Exception,
+    wird die Nachricht negativ bestaetigt (nack, ohne Requeue) statt den
+    ganzen Consumer abstuerzen zu lassen. `stop_event` erlaubt einen
+    sauberen Shutdown von aussen (siehe lifespan()).
+    """
     # Aeussere Schleife: baut die Verbindung neu auf, sobald sie einmal
     # verloren geht (Start-Race, RabbitMQ-Neustart, Netzwerk-Hiccup, ...).
     # Ohne das stirbt der Consumer-Thread bei jedem Verbindungsproblem

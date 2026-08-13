@@ -1,3 +1,11 @@
+"""RabbitMQ-Anbindung des audit-service.
+
+Anders als bei den anderen Services gibt es hier kein publish_message() -
+audit-service veroeffentlicht selbst nie Nachrichten, sondern konsumiert nur
+(siehe consume_audit_events() unten, gebunden auf Routing-Key "#" statt auf
+einzelne Event-Typen wie bei den anderen Services).
+"""
+
 import json
 import logging
 import threading
@@ -9,7 +17,10 @@ import pika.exceptions
 
 from .config import settings
 
+# Topic-Exchange, ueber den alle Services ihre Events/Commands austauschen.
 EXCHANGE_NAME = "webshop.events"
+# Eigene Queue des audit-service - gebunden auf "#" (siehe queue_bind()
+# unten), bekommt dadurch als einziger Service wirklich JEDE Nachricht.
 AUDIT_QUEUE_NAME = "audit-service.snapshots"
 
 logger = logging.getLogger(__name__)
@@ -49,6 +60,16 @@ def consume_audit_events(
         handle_message: Callable[[dict[str, Any]], None],
         stop_event: threading.Event,
 ) -> None:
+    """Konsumiert dauerhaft ALLE Nachrichten auf dem Exchange (Routing-Key "#").
+
+    Blockierend - gedacht zum Laufen in einem eigenen Thread (siehe
+    lifespan() in main.py). Fuer jede empfangene Nachricht wird
+    `handle_message(message)` aufgerufen (im Normalbetrieb
+    insert_snapshot_from_message aus database.py); wirft der Handler eine
+    Exception, wird die Nachricht negativ bestaetigt (nack, ohne Requeue)
+    statt den ganzen Consumer abstuerzen zu lassen. `stop_event` erlaubt
+    einen sauberen Shutdown von aussen.
+    """
     # Aeussere Schleife: baut die Verbindung neu auf, sobald sie einmal
     # verloren geht (Start-Race, RabbitMQ-Neustart, Netzwerk-Hiccup, ...).
     while not stop_event.is_set():
@@ -61,6 +82,10 @@ def consume_audit_events(
             channel = connection.channel()
             channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type="topic", durable=True)
             channel.queue_declare(queue=AUDIT_QUEUE_NAME, durable=True)
+            # routing_key="#" ist bei einem Topic-Exchange der Alles-Platzhalter
+            # (matcht jeden Routing-Key, beliebig viele Wortsegmente) - genau
+            # das macht audit-service zum generischen Event-Sink ohne Wissen
+            # ueber einzelne Nachrichtentypen.
             channel.queue_bind(queue=AUDIT_QUEUE_NAME, exchange=EXCHANGE_NAME, routing_key="#")
 
             for method_frame, properties, body in channel.consume(
