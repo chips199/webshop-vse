@@ -1,0 +1,31 @@
+%% Sequenzdiagramm Fehlerszenario - siehe docs/architecture.md, Abschnitt 6
+%% "Fehlerszenario: Zahlung abgelehnt" - Kompensationsablauf per Saga-Muster.
+sequenceDiagram
+    autonumber
+    participant Client as React/Client
+    participant Shop as Shop-Service
+    participant MQ as RabbitMQ
+    participant Warehouse as Warehouse-Service
+    participant Billing as Billing-Service
+    participant Audit as Audit-Service
+
+    Client->>Shop: POST /orders
+    Shop->>MQ: warehouse.reserve.requested
+    MQ-->>Warehouse: warehouse.reserve.requested
+    Warehouse->>MQ: warehouse.reservation.succeeded
+    MQ-->>Shop: warehouse.reservation.succeeded
+    Shop->>MQ: billing.payment.requested
+    MQ-->>Billing: billing.payment.requested
+    Billing->>Billing: Payment-Fassade charge()
+    Billing->>MQ: billing.payment.failed
+    Billing->>MQ: audit PAYMENT_FAILED
+    MQ-->>Shop: billing.payment.failed
+    Shop->>MQ: warehouse.cancel.requested
+    Shop->>Shop: Order=PAYMENT_FAILED
+    MQ-->>Warehouse: warehouse.cancel.requested
+    Warehouse->>Warehouse: Reservierung stornieren
+    Warehouse->>MQ: warehouse.cancel.succeeded
+    Warehouse->>MQ: audit WAREHOUSE_RESERVATION_CANCELLED
+    Shop->>MQ: order.rollback.completed
+    MQ-->>Audit: alle Audit-Events
+    Shop-->>Client: 422 Unprocessable Entity

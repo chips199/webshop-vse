@@ -1,0 +1,15 @@
+%% Systemkontext-Diagramm - siehe docs/architecture.md, Abschnitt 2 "Systemkontext"
+%% Zeigt das System und seine externen Akteure (Kunde, Admin, Zahlungsanbieter-Stubs).
+flowchart LR
+    Customer[Kunde]
+    Admin[Admin]
+    Frontend[React Frontend]
+    Services[FastAPI Microservices]
+    Stripe[Stripe Sandbox oder Stub]
+    PayPal[PayPal Sandbox oder Stub]
+
+    Customer -->|Bestellung aufgeben| Frontend
+    Admin -->|Audit-Timeline ansehen| Frontend
+    Frontend -->|HTTP/OpenAPI| Services
+    Services -->|PaymentAdapter| Stripe
+    Services -->|PaymentAdapter| PayPal

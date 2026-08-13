@@ -1,0 +1,21 @@
+%% Komponentendiagramm - siehe docs/architecture.md, Abschnitt 3 "Komponenten"
+%% Zeigt alle Services, ihre Schnittstellen und Kommunikationsbeziehungen.
+flowchart LR
+    Customer[Kunde] --> React[React Frontend]
+    React --> Shop[Shop-Service<br/>FastAPI]
+
+    Shop <--> Rabbit[(RabbitMQ)]
+    Rabbit <--> Warehouse[Warehouse-Service<br/>FastAPI]
+    Rabbit <--> Billing[Billing-Service<br/>FastAPI]
+    Rabbit <--> Invoice[Invoice-Service<br/>FastAPI]
+    Rabbit --> Audit[Audit-Service<br/>FastAPI]
+
+    Billing --> Facade[Payment-Fassade]
+    Facade --> Stripe[StripeAdapter<br/>Sandbox oder Stub]
+    Facade --> PayPal[PayPalAdapter<br/>Sandbox oder Stub]
+
+    Audit --> AuditDb[(PostgreSQL<br/>audit_service)]
+    Shop --> ShopDb[(PostgreSQL<br/>shop_service)]
+    Warehouse --> WarehouseDb[(PostgreSQL<br/>warehouse_service)]
+    Billing --> BillingDb[(PostgreSQL<br/>billing_service)]
+    Invoice --> InvoiceDb[(PostgreSQL<br/>invoice_service)]

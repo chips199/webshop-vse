@@ -1,0 +1,41 @@
+%% Sequenzdiagramm Happy Path - siehe docs/architecture.md, Abschnitt 5 "Happy Path"
+%% Vollstaendiger Bestellablauf vom POST /orders bis Order=COMPLETED.
+sequenceDiagram
+    autonumber
+    participant Client as React/Client
+    participant Shop as Shop-Service
+    participant MQ as RabbitMQ
+    participant Warehouse as Warehouse-Service
+    participant Billing as Billing-Service
+    participant Invoice as Invoice-Service
+    participant Audit as Audit-Service
+
+    Client->>Shop: POST /orders
+    Shop->>Shop: correlationId erzeugen, Order=PENDING
+    Shop->>MQ: warehouse.reserve.requested
+    Shop->>MQ: audit ORDER_PLACED
+    MQ-->>Warehouse: warehouse.reserve.requested
+    Warehouse->>Warehouse: Bestand pruefen, Reservierung anlegen
+    Warehouse->>MQ: warehouse.reservation.succeeded
+    Warehouse->>MQ: audit WAREHOUSE_RESERVED
+    MQ-->>Shop: warehouse.reservation.succeeded
+    Shop->>MQ: billing.payment.requested
+    MQ-->>Billing: billing.payment.requested
+    Billing->>Billing: Payment-Fassade charge()
+    Billing->>MQ: billing.payment.succeeded
+    Billing->>MQ: audit PAYMENT_SUCCEEDED
+    MQ-->>Shop: billing.payment.succeeded
+    Shop->>MQ: invoice.create.requested
+    MQ-->>Invoice: invoice.create.requested
+    Invoice->>Invoice: PDF-Rechnung erzeugen und speichern
+    Invoice->>MQ: invoice.created
+    Invoice->>MQ: audit INVOICE_CREATED
+    Shop->>MQ: warehouse.commit.requested
+    MQ-->>Warehouse: warehouse.commit.requested
+    Warehouse->>Warehouse: Reservierte Artikel ausbuchen
+    Warehouse->>MQ: warehouse.commit.succeeded
+    MQ-->>Shop: warehouse.commit.succeeded
+    Shop->>Shop: Order=COMPLETED
+    Shop->>MQ: order.completed
+    MQ-->>Audit: alle Audit-Events
+    Shop-->>Client: 201 Created
