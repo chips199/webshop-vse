@@ -17,5 +17,5 @@ flowchart LR
     Audit --> AuditDb[(PostgreSQL<br/>audit_service)]
     Shop --> ShopDb[(PostgreSQL<br/>shop_service)]
     Warehouse --> WarehouseDb[(PostgreSQL<br/>warehouse_service)]
-    Billing --> BillingDb[(PostgreSQL<br/>billing_service)]
     Invoice --> InvoiceDb[(PostgreSQL<br/>invoice_service)]
+    %% Billing-Service ist zustandslos und hat bewusst keine eigene Datenbank.

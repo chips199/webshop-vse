@@ -79,7 +79,6 @@ services:
     environment:
       SERVICE_NAME: billing-service
       SERVICE_PORT: 8002
-      DATABASE_URL: postgresql://webshop:webshop@postgres:5432/billing_service
       RABBITMQ_URL: amqp://webshop:webshop@rabbitmq:5672/
       PAYMENT_PROVIDER: stripe
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}

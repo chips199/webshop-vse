@@ -1,54 +1,55 @@
 # Billing Service
 
-FastAPI service for payment processing through a payment facade. PayPal and
-Stripe are available behind the facade. With sandbox credentials the adapters
-call the Stripe/PayPal sandbox APIs; without credentials they fall back to
-deterministic local stubs.
+FastAPI-Service fuer die Zahlungsabwicklung ueber eine Payment-Facade. Hinter
+der Facade stehen PayPal und Stripe. Mit Sandbox-Credentials rufen die
+Adapter die echten Stripe-/PayPal-Sandbox-APIs auf; ohne Credentials fallen
+sie auf deterministische lokale Stubs zurueck.
 
-## Prerequisites
+## Voraussetzungen
 
-- Docker and Docker Compose (recommended - runs this service together with
-  PostgreSQL and RabbitMQ)
-- Alternatively, for standalone development: Python 3.12, a reachable
-  PostgreSQL instance (database `billing_service`) and a reachable RabbitMQ
-  instance
+- Docker und Docker Compose (empfohlen - startet diesen Service zusammen mit
+  RabbitMQ)
+- Alternativ fuer die eigenstaendige Entwicklung: Python 3.12 und eine
+  erreichbare RabbitMQ-Instanz. billing-service ist zustandslos und nutzt
+  keine Datenbank (keine Persistenzschicht, keine `psycopg`-Abhaengigkeit).
 
-## Getting started
+## Erste Schritte
 
-Via Docker Compose, from the repository root (starts the full stack):
+Ueber Docker Compose, aus dem Repository-Root (startet den gesamten Stack):
 
 ```bash
 docker compose up --build billing-service
 ```
 
-Standalone, from this directory, against dependencies already running
-elsewhere (e.g. via `docker compose up postgres rabbitmq`):
+Eigenstaendig, aus diesem Verzeichnis, gegen ein bereits laufendes RabbitMQ
+(z.B. per `docker compose up rabbitmq`):
 
 ```bash
 pip install -r requirements.txt
 uvicorn src.main:app --reload --port 8002
 ```
 
-The service listens on port `8002` by default (see `SERVICE_PORT` below).
-Health check: `GET http://localhost:8002/health`. Interactive API docs:
-`http://localhost:8002/docs`. billing-service has no client-facing UI - it is
-only reached via RabbitMQ messages published by shop-service (see below).
+Der Service laeuft standardmaessig auf Port `8002` (siehe `SERVICE_PORT`
+unten). Health-Check: `GET http://localhost:8002/health`. Interaktive
+API-Doku: `http://localhost:8002/docs`. billing-service hat keine eigene
+Oberflaeche fuer Endnutzer - er wird ausschliesslich ueber RabbitMQ-
+Nachrichten von shop-service erreicht (siehe unten).
 
-## Local endpoints
+## Lokale Endpunkte
 
 - `GET /health`
 - `GET /payments/{transactionId}/status`
 - `POST /webhooks/payment-stub`
 
-Billing-service is not exposed to clients directly. It is only reached
-through `billing.payment.requested`, `billing.payment.confirm.requested` and
-`billing.refund.requested` messages published by shop-service.
+billing-service ist Clients nicht direkt zugaenglich. Er wird nur ueber die
+Nachrichten `billing.payment.requested`, `billing.payment.confirm.requested`
+und `billing.refund.requested` erreicht, die von shop-service publiziert
+werden.
 
-## Configuration
+## Konfiguration
 
 - `SERVICE_NAME`
 - `SERVICE_PORT`
-- `DATABASE_URL`
 - `RABBITMQ_URL`
 - `PAYMENT_PROVIDER`
 - `STRIPE_SECRET_KEY`
@@ -59,42 +60,50 @@ through `billing.payment.requested`, `billing.payment.confirm.requested` and
 - `SHOP_FRONTEND_BASE_URL`
 - `ASYNC_PAYMENT_WEBHOOK_URL`
 - `ASYNC_PAYMENT_WEBHOOK_DELAY_SECONDS`
+- `CORS_ALLOWED_ORIGINS` - kommagetrennte Liste erlaubter Browser-Origins
+  (Verteidigung in der Tiefe; das Frontend ruft billing-service nie direkt
+  auf, sondern immer ueber shop-service)
+- `PAYMENT_RETRY_MAX_ATTEMPTS` - Anzahl Retry-Versuche mit Backoff fuer
+  `PaymentFacade`-Aufrufe an den Provider-Adapter
+- `PAYMENT_RETRY_BACKOFF_SECONDS` - Basis-Wartezeit zwischen diesen Retries
 
-## Real sandbox redirect vs. simulated webhook (Bonus 4.4)
+## Echter Sandbox-Redirect vs. simulierter Webhook (Bonus 4.4)
 
-With sandbox credentials set, neither adapter resolves `charge()`
-synchronously - both always return `PENDING`:
+Mit gesetzten Sandbox-Credentials loest keiner der beiden Adapter `charge()`
+synchron auf - beide liefern immer `PENDING`:
 
-- `StripeAdapter` (with `STRIPE_SECRET_KEY`) creates a real Stripe Checkout
-  Session and returns a `redirect_url` to the real hosted payment page.
-- `PayPalAdapter` (with `PAYPAL_CLIENT_ID`/`PAYPAL_CLIENT_SECRET`) creates a
-  real PayPal sandbox order and returns a `redirect_url` to the real approval
-  page.
+- `StripeAdapter` (mit `STRIPE_SECRET_KEY`) erstellt eine echte Stripe
+  Checkout Session und liefert eine `redirect_url` zur echten gehosteten
+  Zahlungsseite.
+- `PayPalAdapter` (mit `PAYPAL_CLIENT_ID`/`PAYPAL_CLIENT_SECRET`) erstellt
+  eine echte PayPal-Sandbox-Order und liefert eine `redirect_url` zur echten
+  Freigabeseite.
 
-Both URLs are built from `SHOP_FRONTEND_BASE_URL`. shop-service exposes the
-URL so the frontend can redirect the buyer's browser there. After the buyer
-returns, shop-service publishes `billing.payment.confirm.requested`, which
-makes billing-service call `getStatus()` (real Stripe session check / PayPal
-capture) to resolve the payment.
+Beide URLs werden aus `SHOP_FRONTEND_BASE_URL` gebaut. shop-service stellt
+die URL bereit, damit das Frontend den Browser des Kaeufers dorthin
+weiterleiten kann. Nachdem der Kaeufer zurueckkehrt, publiziert shop-service
+`billing.payment.confirm.requested`, woraufhin billing-service `getStatus()`
+aufruft (echte Stripe-Session-Pruefung / PayPal-Capture), um die Zahlung
+abzuschliessen.
 
-Only `PayPalAdapter` also simulates this async shape without credentials
-(Bonus 4.4): after `ASYNC_PAYMENT_WEBHOOK_DELAY_SECONDS`, the stub posts to
-itself at `ASYNC_PAYMENT_WEBHOOK_URL` (`POST /webhooks/payment-stub`).
-Billing-service then publishes `billing.payment.succeeded` or
-`billing.payment.failed` and the existing Saga continues through RabbitMQ.
-`StripeAdapter` without credentials stays a simple, immediately successful
-local stub.
+Nur `PayPalAdapter` simuliert diesen asynchronen Ablauf zusaetzlich ohne
+Credentials (Bonus 4.4): nach `ASYNC_PAYMENT_WEBHOOK_DELAY_SECONDS` sendet
+der Stub sich selbst einen Aufruf an `ASYNC_PAYMENT_WEBHOOK_URL`
+(`POST /webhooks/payment-stub`). billing-service publiziert daraufhin
+`billing.payment.succeeded` oder `billing.payment.failed`, und die
+bestehende Saga laeuft ueber RabbitMQ weiter. `StripeAdapter` bleibt ohne
+Credentials ein einfacher, sofort erfolgreicher lokaler Stub.
 
-For tests, pass `webhookStatus` in the payment metadata:
+Fuer Tests kann `webhookStatus` in den Payment-Metadaten uebergeben werden:
 
 - `webhookStatus=SUCCEEDED`
 - `webhookStatus=FAILED`
 
-## Payment provider extension
+## Erweiterung um weitere Payment-Provider
 
-Add a new subclass of `PaymentAdapter` with a unique `provider_name`. The class
-is registered automatically, so the facade and billing core do not need to be
-changed for additional providers.
+Eine neue Unterklasse von `PaymentAdapter` mit eindeutigem `provider_name`
+hinzufuegen. Die Klasse wird automatisch registriert, sodass Facade und
+Billing-Kernlogik fuer zusaetzliche Provider nicht geaendert werden muessen.
 
 ## Tests
 

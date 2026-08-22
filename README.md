@@ -180,9 +180,12 @@ PostgreSQL wird lokal als gemeinsamer Container betrieben, aber logisch mit getr
 
 - `shop_service`
 - `warehouse_service`
-- `billing_service`
 - `invoice_service`
 - `audit_service`
+
+Billing-Service ist zustandslos und hat bewusst keine eigene Datenbank - er
+liest Zahlungsstatus bei Bedarf direkt beim Zahlungsanbieter (Stripe/PayPal)
+aus, statt ihn selbst zu persistieren.
 
 Die Initialisierung liegt unter [docker/postgres/init-databases.sql](docker/postgres/init-databases.sql).
 

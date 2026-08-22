@@ -20,8 +20,6 @@ class Settings(BaseSettings):
 
     service_name: str = "billing-service"
     service_port: int = 8002
-    # Verbindung zur (gemeinsam genutzten) PostgreSQL-Datenbank.
-    database_url: str = "postgresql://webshop:webshop@localhost:5432/webshop"
     # Verbindung zum RabbitMQ-Broker fuer Event-/Command-Messaging.
     rabbitmq_url: str = "amqp://webshop:webshop@localhost:5672/"
     # Welcher PaymentAdapter aktiv ist ("stripe" oder "paypal") - siehe

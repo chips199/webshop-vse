@@ -54,9 +54,13 @@ flowchart LR
     Audit --> AuditDb[(PostgreSQL<br/>audit_service)]
     Shop --> ShopDb[(PostgreSQL<br/>shop_service)]
     Warehouse --> WarehouseDb[(PostgreSQL<br/>warehouse_service)]
-    Billing --> BillingDb[(PostgreSQL<br/>billing_service)]
     Invoice --> InvoiceDb[(PostgreSQL<br/>invoice_service)]
 ```
+
+Billing-Service ist zustandslos und hat bewusst keine eigene Datenbank: er
+haelt keinen Zahlungsstatus vor, sondern liest ihn bei Bedarf direkt beim
+Zahlungsanbieter (Stripe/PayPal) aus (siehe `getStatus()` in der
+Payment-Fassade).
 
 ### Verantwortlichkeiten
 
@@ -65,7 +69,7 @@ flowchart LR
 | React Frontend | Externe UI fuer Bestellung und Admin-Dashboard |
 | Shop-Service | Externe Order API, Produktkatalog, correlationId, Order-Status, Saga-Orchestrierung; DB `shop_service` |
 | Warehouse-Service | Bestand verwalten, Reservierung anlegen, stornieren und final ausbuchen; DB `warehouse_service` |
-| Billing-Service | Zahlungsfluss, Payment-Fassade, Checkout-Sessions, Refunds; DB `billing_service` vorbereitet |
+| Billing-Service | Zahlungsfluss, Payment-Fassade, Checkout-Sessions, Refunds; zustandslos, keine eigene DB |
 | Invoice-Service | PDF-Rechnungserstellung, persistente Invoice-Metadaten und Retry-Mechanismus; DB `invoice_service` |
 | Audit-Service | Unveraenderliche Audit-Snapshots chronologisch bereitstellen; DB `audit_service` |
 | RabbitMQ | Commands und Domain-Events zwischen Services |
