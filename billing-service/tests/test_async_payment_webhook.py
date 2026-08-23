@@ -1,7 +1,8 @@
 import unittest
 from unittest.mock import patch
 
-from src.main import AsyncPaymentWebhookRequest, receive_async_payment_webhook
+from src.schemas import AsyncPaymentWebhookRequest
+from src.routes import receive_async_payment_webhook
 
 
 class AsyncPaymentWebhookTest(unittest.IsolatedAsyncioTestCase):
@@ -17,7 +18,7 @@ class AsyncPaymentWebhookTest(unittest.IsolatedAsyncioTestCase):
             previousEventId="event-payment-requested",
         )
 
-        with patch("src.main.publish_message") as publish_message:
+        with patch("src.service.publish_message") as publish_message:
             response = await receive_async_payment_webhook(request)
 
         self.assertTrue(response.accepted)
@@ -43,7 +44,7 @@ class AsyncPaymentWebhookTest(unittest.IsolatedAsyncioTestCase):
             message="Async stub declined the payment.",
         )
 
-        with patch("src.main.publish_message") as publish_message:
+        with patch("src.service.publish_message") as publish_message:
             response = await receive_async_payment_webhook(request)
 
         self.assertEqual(response.eventType, "billing.payment.failed")

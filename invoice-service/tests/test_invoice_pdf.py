@@ -2,12 +2,13 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from src import main
+from src import pdf as pdf_module
+from src import service
 
 
 class InvoicePdfTest(unittest.TestCase):
     def test_render_pdf_creates_pdf_document(self) -> None:
-        pdf = main.render_pdf(["RETRO PARTS TERMINAL", "Bestellung: order-1"])
+        pdf = pdf_module.render_pdf(["RETRO PARTS TERMINAL", "Bestellung: order-1"])
 
         self.assertTrue(pdf.startswith(b"%PDF-1.4"))
         self.assertIn(b"RETRO PARTS TERMINAL", pdf)
@@ -15,7 +16,7 @@ class InvoicePdfTest(unittest.TestCase):
         self.assertTrue(pdf.rstrip().endswith(b"%%EOF"))
 
     def test_pdf_escape_handles_parentheses_and_backslashes(self) -> None:
-        escaped = main._pdf_escape(r"CPU (tested) \\ ok")
+        escaped = pdf_module._pdf_escape(r"CPU (tested) \\ ok")
 
         self.assertEqual(escaped, r"CPU \(tested\) \\\\ ok")
 
@@ -51,16 +52,16 @@ class InvoicePdfTest(unittest.TestCase):
             ],
         }
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_invoice_dir = main.invoice_dir
-            main.invoice_dir = Path(temp_dir)
+            original_invoice_dir = pdf_module.invoice_dir
+            pdf_module.invoice_dir = Path(temp_dir)
             try:
-                path = main.create_invoice_pdf(
+                path = pdf_module.create_invoice_pdf(
                     "22222222-2222-2222-2222-222222222222",
                     "33333333-3333-3333-3333-333333333333",
                     payload,
                 )
             finally:
-                main.invoice_dir = original_invoice_dir
+                pdf_module.invoice_dir = original_invoice_dir
 
             self.assertTrue(path.exists())
             self.assertEqual(path.suffix, ".pdf")
@@ -82,7 +83,7 @@ class InvoicePdfTest(unittest.TestCase):
             "lastError": None,
         }
 
-        serialized = main._serialize_invoice(invoice)
+        serialized = service._serialize_invoice(invoice)
 
         self.assertEqual(serialized["invoiceId"], "22222222-2222-2222-2222-222222222222")
         self.assertEqual(serialized["downloadUrl"], "/invoices/22222222-2222-2222-2222-222222222222/pdf")
