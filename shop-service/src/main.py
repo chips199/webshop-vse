@@ -315,7 +315,7 @@ def request_invoice_with_circuit(
         transition = invoice_circuit_breaker.before_call()
         publish_invoice_circuit_transition(correlation_id, order_id, transition, previous_message["messageId"])
     except CircuitBreakerOpenError as exc:
-        update_order_status(order_id, "INVOICE_RETRY_PENDING")
+        update_order_status(order_id, "INVOICE_FAILED")
         logger.warning(
             "Invoice request blocked by circuit breaker",
             extra={"correlation_id": correlation_id, "context": {"orderId": order_id, "error": str(exc)}},
