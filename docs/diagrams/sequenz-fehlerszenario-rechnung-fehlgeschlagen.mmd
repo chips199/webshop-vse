@@ -1,0 +1,69 @@
+%% Sequenzdiagramm Fehlerszenario - siehe docs/architecture.md, Abschnitt 6
+%% "Fehlerszenarien", Unterabschnitt "Rechnungserstellung fehlgeschlagen".
+%% Einziges Szenario OHNE Rollback von Zahlung/Lager: Zahlung und
+%% Warehouse-Commit sind bereits abgeschlossen, bevor die Rechnung
+%% wiederholt fehlschlaegt - die Bestellung bleibt bewusst haengen statt
+%% zurueckgerollt zu werden (Aufgabenblatt 2.3). Zeigt zusaetzlich die
+%% Retry-Orchestrierung durch die Shop-Saga (nicht durch invoice-service
+%% selbst) und den Invoice-Circuit-Breaker (Bonusaufgabe 4.1).
+sequenceDiagram
+    autonumber
+    participant Client as React/Client
+    participant Shop as Shop-Service
+    participant MQ as RabbitMQ
+    participant Warehouse as Warehouse-Service
+    participant Billing as Billing-Service
+    participant Invoice as Invoice-Service
+    participant Audit as Audit-Service
+
+    Client->>Shop: POST /orders (payment.scenario=invoice_failed)
+    Shop->>MQ: warehouse.reserve.requested
+    Shop-->>Client: 202 Accepted (Order=PENDING)
+    MQ-->>Warehouse: warehouse.reserve.requested
+    Warehouse->>MQ: warehouse.reservation.succeeded
+    MQ-->>Shop: warehouse.reservation.succeeded
+    Shop->>MQ: billing.payment.requested
+    MQ-->>Billing: billing.payment.requested
+    Billing->>MQ: billing.payment.succeeded
+    MQ-->>Shop: billing.payment.succeeded
+
+    par Lager wird trotzdem final ausgebucht
+        Shop->>MQ: warehouse.commit.requested
+        MQ-->>Warehouse: warehouse.commit.requested
+        Warehouse->>MQ: warehouse.commit.succeeded
+        MQ-->>Shop: warehouse.commit.succeeded
+        Shop->>Shop: warehouseCommitStatus=SUCCEEDED
+    and Rechnung schlaegt wiederholt fehl
+        Shop->>MQ: invoice.create.requested (attempt=1)
+        MQ-->>Invoice: invoice.create.requested (attempt=1)
+        Invoice->>Invoice: PDF-Rendering - Testszenario erzwingt Fehlschlag
+        Invoice->>MQ: invoice.failed (attempt=1, reasonCode=INVOICE_RENDER_FAILED)
+        MQ-->>Shop: invoice.failed (attempt=1)
+        Shop->>Shop: Circuit Breaker record_failure() -> failureCount=1 (CLOSED)
+        Shop->>Shop: Order=INVOICE_RETRY_PENDING
+        Shop->>MQ: invoice.retry.scheduled (attempt=2)
+        Note over Shop: Backoff 0.2s * attempt, dann automatischer Retry
+        Shop->>MQ: invoice.create.requested (attempt=2)
+        MQ-->>Invoice: invoice.create.requested (attempt=2)
+        Invoice->>MQ: invoice.failed (attempt=2, reasonCode=INVOICE_RENDER_FAILED)
+        MQ-->>Shop: invoice.failed (attempt=2)
+        Shop->>Shop: Circuit Breaker record_failure() -> failureCount=2 (CLOSED)
+        Shop->>Shop: Order=INVOICE_RETRY_PENDING
+        Shop->>MQ: invoice.retry.scheduled (attempt=3)
+        Shop->>MQ: invoice.create.requested (attempt=3)
+        MQ-->>Invoice: invoice.create.requested (attempt=3)
+        Invoice->>MQ: invoice.failed (attempt=3, reasonCode=INVOICE_RENDER_FAILED)
+        MQ-->>Shop: invoice.failed (attempt=3)
+        Shop->>Shop: Circuit Breaker record_failure() -> failureCount=3, State CLOSED-to-OPEN
+        Shop->>MQ: invoice.circuit.state.changed (state=OPEN)
+        Shop->>Shop: attempt=3 = max_retries -> kein weiterer Retry
+        Shop->>Shop: Order=INVOICE_FAILED (endgueltig)
+    end
+
+    MQ-->>Audit: alle Events dieser Bestellung (Routing-Key "#")
+
+    Note over Shop: Order bleibt dauerhaft INVOICE_FAILED - Zahlung und<br/>Warehouse-Commit werden NICHT zurueckgerollt (siehe Abschnitt 6.4).
+
+    Note over Client,Shop: Client pollt zwischenzeitlich GET /orders/{orderId}
+    Client->>Shop: GET /orders/{orderId}
+    Shop-->>Client: 200 OK (status=INVOICE_FAILED)

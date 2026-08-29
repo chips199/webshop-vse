@@ -1,49 +1,55 @@
-%% Sequenzdiagramm Happy Path - siehe docs/architecture.md, Abschnitt 5 "Happy Path"
-%% Vollstaendiger Bestellablauf vom POST /orders bis Order=COMPLETED.
-%% Wichtig: POST /orders antwortet SOFORT mit 202 Accepted (Order=PENDING) -
-%% die gesamte Saga danach laeuft asynchron ueber RabbitMQ; der Client
-%% erfaehrt den Endstatus erst durch Polling von GET /orders/{orderId}.
+%% Sequenzdiagramm - siehe docs/architecture.md, Abschnitt 6 "Fehlerszenarien",
+%% Unterabschnitt "Asynchrone Zahlung" (Bonusaufgabe 4.4). Eigentlich kein
+%% Fehlerfall, sondern eine verzoegerte Erfolgs-/Fehlermeldung: PayPal liefert
+%% NIE ein Sofort-Ergebnis, sondern meldet sich per Webhook-Callback zurueck.
+%% Gezeigt wird der lokale Stub-Modus (keine echten PayPal-Sandbox-Credentials
+%% konfiguriert) - mit echten Credentials laeuft stattdessen ein Redirect zur
+%% PayPal-Freigabeseite und POST /orders/{orderId}/payment-confirmation (siehe
+%% Begleittext).
 sequenceDiagram
     autonumber
     participant Client as React/Client
     participant Shop as Shop-Service
     participant MQ as RabbitMQ
-    participant Warehouse as Warehouse-Service
     participant Billing as Billing-Service
+    participant Warehouse as Warehouse-Service
     participant Invoice as Invoice-Service
     participant Audit as Audit-Service
 
-    Client->>Shop: POST /orders
-    Shop->>Shop: correlationId erzeugen, Order=PENDING
-    Shop->>MQ: order.created
+    Client->>Shop: POST /orders (payment.provider=paypal)
     Shop->>MQ: warehouse.reserve.requested
     Shop-->>Client: 202 Accepted (Order=PENDING)
     MQ-->>Warehouse: warehouse.reserve.requested
-    Warehouse->>Warehouse: Bestand pruefen, Reservierung anlegen
     Warehouse->>MQ: warehouse.reservation.succeeded
     MQ-->>Shop: warehouse.reservation.succeeded
     Shop->>Shop: Order=RESERVED, dann PAYMENT_PENDING
     Shop->>MQ: billing.payment.requested
     MQ-->>Billing: billing.payment.requested
-    Billing->>Billing: Payment-Fassade charge()
+    Billing->>Billing: PayPalAdapter.charge() - Stub-Modus, kein Sofort-Ergebnis
+    Billing->>Billing: threading.Timer plant verzoegerten Selbst-Webhook
+    Billing->>MQ: billing.payment.pending (kein redirectUrl)
+    MQ-->>Shop: billing.payment.pending
+    Shop->>Shop: kein redirectUrl -> Order bleibt PAYMENT_PENDING
+
+    Note over Billing: nach konfigurierter Verzoegerung (async_payment_webhook_delay_seconds)
+
+    Billing->>Billing: POST /webhooks/payment-stub (Selbstaufruf)
     Billing->>MQ: billing.payment.succeeded
     MQ-->>Shop: billing.payment.succeeded
 
     par Rechnung erzeugen
         Shop->>MQ: invoice.create.requested
         MQ-->>Invoice: invoice.create.requested
-        Invoice->>Invoice: PDF-Rechnung erzeugen und speichern
         Invoice->>MQ: invoice.created
         MQ-->>Shop: invoice.created
     and Lager final ausbuchen
         Shop->>MQ: warehouse.commit.requested
         MQ-->>Warehouse: warehouse.commit.requested
-        Warehouse->>Warehouse: Reservierte Artikel ausbuchen
         Warehouse->>MQ: warehouse.commit.succeeded
         MQ-->>Shop: warehouse.commit.succeeded
     end
 
-    Shop->>Shop: complete_order_if_ready(): beide Zweige fertig -> Order=COMPLETED
+    Shop->>Shop: Order=COMPLETED
     Shop->>MQ: order.completed
     MQ-->>Audit: alle Events dieser Bestellung (Routing-Key "#")
 

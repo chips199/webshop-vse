@@ -1,0 +1,28 @@
+%% Sequenzdiagramm Fehlerszenario - siehe docs/architecture.md, Abschnitt 6
+%% "Fehlerszenarien", Unterabschnitt "Lager nicht verfuegbar". Kuerzester
+%% Fehlerpfad: die Saga bricht bereits im ersten Schritt ab, Billing und
+%% Invoice werden gar nicht erst kontaktiert.
+sequenceDiagram
+    autonumber
+    participant Client as React/Client
+    participant Shop as Shop-Service
+    participant MQ as RabbitMQ
+    participant Warehouse as Warehouse-Service
+    participant Audit as Audit-Service
+
+    Client->>Shop: POST /orders (payment.scenario=out_of_stock)
+    Shop->>MQ: warehouse.reserve.requested
+    Shop-->>Client: 202 Accepted (Order=PENDING)
+    MQ-->>Warehouse: warehouse.reserve.requested
+    Warehouse->>Warehouse: Bestand pruefen - Testszenario erzwingt Fehlschlag
+    Warehouse->>Warehouse: bereits erfolgte Reservierung sofort stornieren
+    Warehouse->>MQ: warehouse.reservation.failed (reasonCode=OUT_OF_STOCK)
+    MQ-->>Shop: warehouse.reservation.failed
+    Shop->>Shop: Order=OUT_OF_STOCK
+    MQ-->>Audit: alle Events dieser Bestellung (Routing-Key "#")
+
+    Note over Shop,Warehouse: Kein billing.payment.requested und kein<br/>invoice.create.requested werden ausgeloest.
+
+    Note over Client,Shop: Client pollt zwischenzeitlich GET /orders/{orderId}
+    Client->>Shop: GET /orders/{orderId}
+    Shop-->>Client: 200 OK (status=OUT_OF_STOCK)

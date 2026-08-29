@@ -1,5 +1,7 @@
 %% Sequenzdiagramm Fehlerszenario - siehe docs/architecture.md, Abschnitt 6
-%% "Fehlerszenario: Zahlung abgelehnt" - Kompensationsablauf per Saga-Muster.
+%% "Fehlerszenarien", Unterabschnitt "Zahlung abgelehnt" - Kompensationsablauf
+%% per Saga-Muster. POST /orders antwortet wie im Happy Path sofort mit
+%% 202 Accepted; der Fehlschlag wird erst asynchron sichtbar (Polling).
 sequenceDiagram
     autonumber
     participant Client as React/Client
@@ -9,23 +11,27 @@ sequenceDiagram
     participant Billing as Billing-Service
     participant Audit as Audit-Service
 
-    Client->>Shop: POST /orders
+    Client->>Shop: POST /orders (payment.scenario=payment_failed)
     Shop->>MQ: warehouse.reserve.requested
+    Shop-->>Client: 202 Accepted (Order=PENDING)
     MQ-->>Warehouse: warehouse.reserve.requested
     Warehouse->>MQ: warehouse.reservation.succeeded
     MQ-->>Shop: warehouse.reservation.succeeded
+    Shop->>Shop: Order=RESERVED, dann PAYMENT_PENDING
     Shop->>MQ: billing.payment.requested
     MQ-->>Billing: billing.payment.requested
-    Billing->>Billing: Payment-Fassade charge()
-    Billing->>MQ: billing.payment.failed
-    Billing->>MQ: audit PAYMENT_FAILED
+    Billing->>Billing: Payment-Fassade charge() - Testszenario simuliert Ablehnung
+    Billing->>MQ: billing.payment.failed (reasonCode=PAYMENT_DECLINED)
     MQ-->>Shop: billing.payment.failed
-    Shop->>MQ: warehouse.cancel.requested
     Shop->>Shop: Order=PAYMENT_FAILED
+    Shop->>MQ: warehouse.cancel.requested
     MQ-->>Warehouse: warehouse.cancel.requested
     Warehouse->>Warehouse: Reservierung stornieren
     Warehouse->>MQ: warehouse.cancel.succeeded
-    Warehouse->>MQ: audit WAREHOUSE_RESERVATION_CANCELLED
-    Shop->>MQ: order.rollback.completed
-    MQ-->>Audit: alle Audit-Events
-    Shop-->>Client: 422 Unprocessable Entity
+    MQ-->>Shop: warehouse.cancel.succeeded
+    Shop->>Shop: Order bleibt PAYMENT_FAILED
+    MQ-->>Audit: alle Events dieser Bestellung (Routing-Key "#")
+
+    Note over Client,Shop: Client pollt zwischenzeitlich GET /orders/{orderId}
+    Client->>Shop: GET /orders/{orderId}
+    Shop-->>Client: 200 OK (status=PAYMENT_FAILED)

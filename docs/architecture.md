@@ -120,9 +120,19 @@ Alle Messages verwenden ein gemeinsames Envelope:
 
 Die verbindlichen Routing Keys sind in `docs/event-contracts.md` dokumentiert.
 
-## 5. Happy Path
+## 5. Happy-Path-Sequenz
 
 _Quelldatei: [`docs/diagrams/sequenz-happy-path.mmd`](diagrams/sequenz-happy-path.mmd)_
+
+Wichtig fuer das Lesen aller Sequenzdiagramme in diesem Abschnitt: `POST
+/orders` antwortet **immer sofort** mit `202 Accepted` (Order=`PENDING`),
+noch bevor irgendein RabbitMQ-Schritt der Saga verarbeitet wurde. Die
+gesamte weitere Verarbeitung laeuft asynchron; der Client erfaehrt den
+tatsaechlichen Endstatus erst durch spaeteres Polling von `GET
+/orders/{orderId}` (oder durch die SSE-Echtzeit-Updates im
+Admin-Dashboard, siehe Bonusaufgabe 4.3). Eine synchrone Endantwort wie in
+einer frueheren Version dieses Diagramms (`201 Created` erst nach
+Abschluss der gesamten Saga) entspricht **nicht** der Implementierung.
 
 ```mermaid
 sequenceDiagram
@@ -137,36 +147,83 @@ sequenceDiagram
 
     Client->>Shop: POST /orders
     Shop->>Shop: correlationId erzeugen, Order=PENDING
+    Shop->>MQ: order.created
     Shop->>MQ: warehouse.reserve.requested
-    Shop->>MQ: audit ORDER_PLACED
+    Shop-->>Client: 202 Accepted (Order=PENDING)
     MQ-->>Warehouse: warehouse.reserve.requested
     Warehouse->>Warehouse: Bestand pruefen, Reservierung anlegen
     Warehouse->>MQ: warehouse.reservation.succeeded
-    Warehouse->>MQ: audit WAREHOUSE_RESERVED
     MQ-->>Shop: warehouse.reservation.succeeded
+    Shop->>Shop: Order=RESERVED, dann PAYMENT_PENDING
     Shop->>MQ: billing.payment.requested
     MQ-->>Billing: billing.payment.requested
     Billing->>Billing: Payment-Fassade charge()
     Billing->>MQ: billing.payment.succeeded
-    Billing->>MQ: audit PAYMENT_SUCCEEDED
     MQ-->>Shop: billing.payment.succeeded
-    Shop->>MQ: invoice.create.requested
-    MQ-->>Invoice: invoice.create.requested
-    Invoice->>Invoice: PDF-Rechnung erzeugen und speichern
-    Invoice->>MQ: invoice.created
-    Invoice->>MQ: audit INVOICE_CREATED
-    Shop->>MQ: warehouse.commit.requested
-    MQ-->>Warehouse: warehouse.commit.requested
-    Warehouse->>Warehouse: Reservierte Artikel ausbuchen
-    Warehouse->>MQ: warehouse.commit.succeeded
-    MQ-->>Shop: warehouse.commit.succeeded
-    Shop->>Shop: Order=COMPLETED
+
+    par Rechnung erzeugen
+        Shop->>MQ: invoice.create.requested
+        MQ-->>Invoice: invoice.create.requested
+        Invoice->>Invoice: PDF-Rechnung erzeugen und speichern
+        Invoice->>MQ: invoice.created
+        MQ-->>Shop: invoice.created
+    and Lager final ausbuchen
+        Shop->>MQ: warehouse.commit.requested
+        MQ-->>Warehouse: warehouse.commit.requested
+        Warehouse->>Warehouse: Reservierte Artikel ausbuchen
+        Warehouse->>MQ: warehouse.commit.succeeded
+        MQ-->>Shop: warehouse.commit.succeeded
+    end
+
+    Shop->>Shop: complete_order_if_ready(): beide Zweige fertig -> Order=COMPLETED
     Shop->>MQ: order.completed
-    MQ-->>Audit: alle Audit-Events
-    Shop-->>Client: 201 Created
+    MQ-->>Audit: alle Events dieser Bestellung (Routing-Key "#")
+
+    Note over Client,Shop: Client pollt zwischenzeitlich GET /orders/{orderId}
+    Client->>Shop: GET /orders/{orderId}
+    Shop-->>Client: 200 OK (status=COMPLETED)
 ```
 
-## 6. Fehlerszenario: Zahlung abgelehnt
+## 6. Fehlerszenarien
+
+Die Choreografie kennt vier relevante Abweichungen vom Happy Path, die
+sich fachlich deutlich unterscheiden: ein Szenario bricht bereits im
+ersten Schritt ab (6.1), eines kompensiert eine bereits erfolgte
+Reservierung (6.2), eines rollt eine bereits erfolgreiche Zahlung wieder
+zurueck (6.3), und eines ist genau genommen kein Fehler, sondern eine
+verzoegerte Erfolgsmeldung (6.4).
+
+### 6.1 Lager nicht verfuegbar
+
+_Quelldatei: [`docs/diagrams/sequenz-fehlerszenario-lager-nicht-verfuegbar.mmd`](diagrams/sequenz-fehlerszenario-lager-nicht-verfuegbar.mmd)_
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client as React/Client
+    participant Shop as Shop-Service
+    participant MQ as RabbitMQ
+    participant Warehouse as Warehouse-Service
+    participant Audit as Audit-Service
+
+    Client->>Shop: POST /orders (payment.scenario=out_of_stock)
+    Shop->>MQ: warehouse.reserve.requested
+    Shop-->>Client: 202 Accepted (Order=PENDING)
+    MQ-->>Warehouse: warehouse.reserve.requested
+    Warehouse->>Warehouse: Bestand pruefen - Testszenario erzwingt Fehlschlag
+    Warehouse->>Warehouse: bereits erfolgte Reservierung sofort stornieren
+    Warehouse->>MQ: warehouse.reservation.failed (reasonCode=OUT_OF_STOCK)
+    MQ-->>Shop: warehouse.reservation.failed
+    Shop->>Shop: Order=OUT_OF_STOCK
+    MQ-->>Audit: alle Events dieser Bestellung (Routing-Key "#")
+
+    Note over Shop,Warehouse: Kein billing.payment.requested und kein<br/>invoice.create.requested werden ausgeloest.
+
+    Client->>Shop: GET /orders/{orderId}
+    Shop-->>Client: 200 OK (status=OUT_OF_STOCK)
+```
+
+### 6.2 Zahlung abgelehnt
 
 _Quelldatei: [`docs/diagrams/sequenz-fehlerszenario-zahlung-abgelehnt.mmd`](diagrams/sequenz-fehlerszenario-zahlung-abgelehnt.mmd)_
 
@@ -180,26 +237,119 @@ sequenceDiagram
     participant Billing as Billing-Service
     participant Audit as Audit-Service
 
-    Client->>Shop: POST /orders
+    Client->>Shop: POST /orders (payment.scenario=payment_failed)
     Shop->>MQ: warehouse.reserve.requested
+    Shop-->>Client: 202 Accepted (Order=PENDING)
     MQ-->>Warehouse: warehouse.reserve.requested
     Warehouse->>MQ: warehouse.reservation.succeeded
     MQ-->>Shop: warehouse.reservation.succeeded
+    Shop->>Shop: Order=RESERVED, dann PAYMENT_PENDING
     Shop->>MQ: billing.payment.requested
     MQ-->>Billing: billing.payment.requested
-    Billing->>Billing: Payment-Fassade charge()
-    Billing->>MQ: billing.payment.failed
-    Billing->>MQ: audit PAYMENT_FAILED
+    Billing->>Billing: Payment-Fassade charge() - Testszenario simuliert Ablehnung
+    Billing->>MQ: billing.payment.failed (reasonCode=PAYMENT_DECLINED)
     MQ-->>Shop: billing.payment.failed
-    Shop->>MQ: warehouse.cancel.requested
     Shop->>Shop: Order=PAYMENT_FAILED
+    Shop->>MQ: warehouse.cancel.requested
     MQ-->>Warehouse: warehouse.cancel.requested
     Warehouse->>Warehouse: Reservierung stornieren
     Warehouse->>MQ: warehouse.cancel.succeeded
-    Warehouse->>MQ: audit WAREHOUSE_RESERVATION_CANCELLED
-    Shop->>MQ: order.rollback.completed
-    MQ-->>Audit: alle Audit-Events
-    Shop-->>Client: 422 Unprocessable Entity
+    MQ-->>Shop: warehouse.cancel.succeeded
+    Shop->>Shop: Order bleibt PAYMENT_FAILED
+    MQ-->>Audit: alle Events dieser Bestellung (Routing-Key "#")
+
+    Client->>Shop: GET /orders/{orderId}
+    Shop-->>Client: 200 OK (status=PAYMENT_FAILED)
+```
+
+### 6.3 Invoice-Service nicht erreichbar (Retry und Circuit Breaker)
+
+_Quelldatei: [`docs/diagrams/sequenz-fehlerszenario-rechnung-fehlgeschlagen.mmd`](diagrams/sequenz-fehlerszenario-rechnung-fehlgeschlagen.mmd)_
+
+Einziges Szenario ohne Rollback von Zahlung/Lager: beide sind bereits
+abgeschlossen, bevor die Rechnung wiederholt fehlschlaegt (siehe
+Begleittext in Kapitel 2 der Pruefungsvorbereitung bzw. Abschnitt 9 hier).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client as React/Client
+    participant Shop as Shop-Service
+    participant Warehouse as Warehouse-Service
+    participant Billing as Billing-Service
+    participant Invoice as Invoice-Service
+    participant MQ as RabbitMQ
+    participant Audit as Audit-Service
+
+    Client->>Shop: POST /orders (payment.scenario=invoice_failed)
+    Shop-->>Client: 202 Accepted (Order=PENDING)
+    Note over Shop,Billing: Reservierung und Zahlung laufen wie im Happy Path.
+
+    par Lager wird trotzdem final ausgebucht
+        Shop->>MQ: warehouse.commit.requested
+        MQ-->>Warehouse: warehouse.commit.requested
+        Warehouse->>MQ: warehouse.commit.succeeded
+        MQ-->>Shop: warehouse.commit.succeeded
+    and Rechnung schlaegt wiederholt fehl
+        Shop->>MQ: invoice.create.requested (attempt=1)
+        MQ-->>Invoice: invoice.create.requested (attempt=1)
+        Invoice->>MQ: invoice.failed (attempt=1)
+        MQ-->>Shop: invoice.failed (attempt=1)
+        Shop->>Shop: Circuit Breaker record_failure() -> 1/3 (CLOSED)
+        Shop->>MQ: invoice.retry.scheduled (attempt=2)
+        Note over Shop: Backoff 0.2s * attempt
+        Shop->>MQ: invoice.create.requested (attempt=2)
+        MQ-->>Invoice: invoice.create.requested (attempt=2)
+        Invoice->>MQ: invoice.failed (attempt=2)
+        MQ-->>Shop: invoice.failed (attempt=2)
+        Shop->>Shop: Circuit Breaker record_failure() -> 2/3 (CLOSED)
+        Shop->>MQ: invoice.retry.scheduled (attempt=3)
+        Shop->>MQ: invoice.create.requested (attempt=3)
+        MQ-->>Invoice: invoice.create.requested (attempt=3)
+        Invoice->>MQ: invoice.failed (attempt=3)
+        MQ-->>Shop: invoice.failed (attempt=3)
+        Shop->>Shop: Circuit Breaker record_failure() -> 3/3, CLOSED-zu-OPEN
+        Shop->>MQ: invoice.circuit.state.changed (state=OPEN)
+        Shop->>Shop: attempt=3=max_retries -> kein weiterer Retry, Order=INVOICE_FAILED
+    end
+
+    MQ-->>Audit: alle Events dieser Bestellung (Routing-Key "#")
+    Client->>Shop: GET /orders/{orderId}
+    Shop-->>Client: 200 OK (status=INVOICE_FAILED)
+```
+
+### 6.4 Asynchrone Zahlung (PayPal-Webhook, Bonusaufgabe 4.4)
+
+_Quelldatei: [`docs/diagrams/sequenz-fehlerszenario-asynchrone-zahlung.mmd`](diagrams/sequenz-fehlerszenario-asynchrone-zahlung.mmd)_
+
+Genau genommen kein Fehlerszenario, sondern der Regelfall bei PayPal: die
+Fassade liefert nie ein Sofort-Ergebnis, sondern `PENDING`, und das
+eigentliche Ergebnis kommt erst per (hier simuliertem) Webhook-Callback
+zurueck.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client as React/Client
+    participant Shop as Shop-Service
+    participant MQ as RabbitMQ
+    participant Billing as Billing-Service
+
+    Client->>Shop: POST /orders (payment.provider=paypal)
+    Shop-->>Client: 202 Accepted (Order=PENDING)
+    Note over Shop,Billing: Reservierung erfolgreich wie im Happy Path.
+    Shop->>MQ: billing.payment.requested
+    MQ-->>Billing: billing.payment.requested
+    Billing->>Billing: PayPalAdapter.charge() - Stub-Modus, kein Sofort-Ergebnis
+    Billing->>Billing: threading.Timer plant verzoegerten Selbst-Webhook
+    Billing->>MQ: billing.payment.pending (kein redirectUrl)
+    MQ-->>Shop: billing.payment.pending
+    Shop->>Shop: kein redirectUrl -> Order bleibt PAYMENT_PENDING
+    Note over Billing: nach konfigurierter Verzoegerung
+    Billing->>Billing: POST /webhooks/payment-stub (Selbstaufruf)
+    Billing->>MQ: billing.payment.succeeded
+    MQ-->>Shop: billing.payment.succeeded
+    Note over Shop: Ablauf setzt sich fort wie im Happy Path ab hier.
 ```
 
 ## 7. Payment-Fassade
