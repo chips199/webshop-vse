@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     async_payment_webhook_url: str = "http://localhost:8002/webhooks/payment-stub"
     # Kuenstliche Verzoegerung, bevor der PayPal-Stub seinen Webhook
     # abschickt - simuliert eine asynchrone Zahlungsbestaetigung.
-    async_payment_webhook_delay_seconds: float = 2.0
+    async_payment_webhook_delay_seconds: float = 30.0
     # Basis-URL des Frontends, fuer die success_url/cancel_url/return_url,
     # zu denen Stripe/PayPal den Kaeufer nach der Sandbox-Zahlung zurueck-
     # schicken.
