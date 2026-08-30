@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from src import saga
 from src.config import settings
-from src.resilience import CircuitBreaker, CircuitBreakerOpenError
+from src.resilience import CircuitBreaker, CircuitBreakerOpenError, CircuitState, CircuitTransition
 
 
 def _message(message_type: str, payload: dict, message_id: str = "msg-1", correlation_id: str = "corr-1") -> dict:
@@ -238,7 +238,36 @@ class RequestInvoiceWithCircuitTest(FreshCircuitBreakerTestCase):
         self.assertEqual(routing_key, "invoice.create.requested")
         self.assertEqual(event["payload"]["attempt"], 1)
 
-    def test_blocked_by_open_circuit_marks_retry_pending_without_publishing(self) -> None:
+    def test_invoice_request_contains_order_details_and_retry_attempt(self) -> None:
+        order = {
+            "customer": {"email": "ada@example.test"},
+            "shippingAddress": {"city": "Berlin"},
+            "billingAddress": {"city": "London"},
+            "items": [{"productId": "product-1", "quantity": 2}],
+        }
+        payload = {
+            "transactionId": "tx-1",
+            "provider": "stripe",
+            "amount": "49.90",
+            "currency": "EUR",
+            "scenario": "invoice_failed",
+        }
+        with patch("src.saga.get_order_record", return_value=order), \
+                patch("src.saga.publish_message") as publish_message:
+            saga.request_invoice_with_circuit(
+                "order-1", "corr-1", payload, {"messageId": "msg-1"}, attempt=2
+            )
+
+        routing_key, event = publish_message.call_args.args
+        self.assertEqual(routing_key, "invoice.create.requested")
+        self.assertEqual(event["payload"]["customer"], order["customer"])
+        self.assertEqual(event["payload"]["shippingAddress"], order["shippingAddress"])
+        self.assertEqual(event["payload"]["billingAddress"], order["billingAddress"])
+        self.assertEqual(event["payload"]["items"], order["items"])
+        self.assertEqual(event["payload"]["attempt"], 2)
+        self.assertEqual(event["previousEventId"], "msg-1")
+
+    def test_blocked_by_open_circuit_marks_invoice_failed_without_publishing(self) -> None:
         with patch.object(saga.invoice_circuit_breaker, "before_call", side_effect=CircuitBreakerOpenError("open")):
             with patch("src.saga.update_order_status") as update_status, \
                     patch("src.saga.publish_message") as publish_message:
@@ -247,7 +276,7 @@ class RequestInvoiceWithCircuitTest(FreshCircuitBreakerTestCase):
                     {"messageId": "msg-1"},
                 )
 
-        update_status.assert_called_once_with("order-1", "INVOICE_RETRY_PENDING")
+        update_status.assert_called_once_with("order-1", "INVOICE_FAILED")
         publish_message.assert_not_called()
 
 
@@ -266,7 +295,57 @@ class ScheduleInvoiceRetryTest(unittest.TestCase):
         self.assertEqual(routing_key, "invoice.retry.scheduled")
         self.assertEqual(event["payload"]["attempt"], 2)
         timer_cls.assert_called_once()
+        self.assertEqual(timer_cls.call_args.args[0], settings.invoice_retry_backoff_seconds)
+        self.assertIs(timer_cls.call_args.args[1], saga.request_invoice_with_circuit)
+        self.assertEqual(timer_cls.call_args.kwargs["kwargs"]["attempt"], 2)
+        self.assertEqual(timer_cls.call_args.kwargs["kwargs"]["previous_message"], event)
+        self.assertTrue(timer_cls.return_value.daemon)
         timer_cls.return_value.start.assert_called_once()
+
+
+class PublishInvoiceCircuitTransitionTest(unittest.TestCase):
+    def test_none_transition_does_not_publish(self) -> None:
+        with patch("src.saga.publish_message") as publish_message:
+            saga.publish_invoice_circuit_transition("corr-1", "order-1", None, "msg-1")
+
+        publish_message.assert_not_called()
+
+    def test_transition_is_published_with_complete_state_payload(self) -> None:
+        transition = CircuitTransition(
+            previous_state=CircuitState.CLOSED,
+            state=CircuitState.OPEN,
+            failure_count=3,
+            reason="INVOICE_RENDER_FAILED",
+        )
+        with patch("src.saga.publish_message") as publish_message:
+            saga.publish_invoice_circuit_transition("corr-1", "order-1", transition, "msg-1")
+
+        routing_key, event = publish_message.call_args.args
+        self.assertEqual(routing_key, "invoice.circuit.state.changed")
+        self.assertEqual(event["previousEventId"], "msg-1")
+        self.assertEqual(
+            event["payload"],
+            {
+                "circuitName": "invoice-service",
+                "orderId": "order-1",
+                "previousState": "CLOSED",
+                "state": "OPEN",
+                "failureCount": 3,
+                "reasonCode": "INVOICE_RENDER_FAILED",
+            },
+        )
+
+
+class NotifyAdminDashboardTest(unittest.TestCase):
+    def test_missing_order_id_does_not_publish(self) -> None:
+        with patch("src.saga.realtime.publish") as realtime_publish:
+            saga.notify_admin_dashboard(None, "corr-1", "invoice.failed")
+
+        realtime_publish.assert_not_called()
+
+    def test_realtime_failure_is_swallowed(self) -> None:
+        with patch("src.saga.realtime.publish", side_effect=RuntimeError("offline")):
+            saga.notify_admin_dashboard("order-1", "corr-1", "invoice.failed")
 
 
 class MaybePublishOrderCompletedTest(unittest.TestCase):
