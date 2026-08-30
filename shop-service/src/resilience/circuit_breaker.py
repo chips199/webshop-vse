@@ -1,5 +1,4 @@
-"""Generischer Circuit-Breaker fuer den Aufruf des Invoice-Service (Bonusaufgabe
-4.1 der Aufgabenstellung).
+"""Generischer Circuit Breaker fuer Aufrufe des Invoice-Service.
 
 Klassisches Drei-Zustands-Muster:
   CLOSED    - Normalbetrieb, Aufrufe werden durchgelassen.
@@ -11,7 +10,7 @@ Klassisches Drei-Zustands-Muster:
               zugelassen; Erfolg -> zurueck zu CLOSED, Fehlschlag -> zurueck
               zu OPEN.
 
-Kennt nichts von HTTP/Invoice-Service - main.py (request_invoice_with_circuit())
+Kennt nichts von HTTP/Invoice-Service - saga.py (request_invoice_with_circuit())
 entscheidet, wann before_call()/record_success()/record_failure() aufgerufen
 werden, und meldet jede Zustandsaenderung (CircuitTransition) als eigenes
 Audit-Snapshot-Event.
@@ -40,7 +39,7 @@ class CircuitBreakerOpenError(RuntimeError):
 
 @dataclass(frozen=True)
 class CircuitTransition:
-    """Beschreibt einen einzelnen Zustandswechsel - wird von main.py 1:1 als
+    """Beschreibt einen einzelnen Zustandswechsel - wird von saga.py als
     Audit-Snapshot geloggt (siehe Aufruf-Stellen von before_call() etc.)."""
 
     previous_state: CircuitState
@@ -67,7 +66,7 @@ class _Circuit:
 
 
 class CircuitBreaker:
-    """Thread-unsicher und zustandsbehaftet - main.py haelt pro Prozess GENAU
+    """Thread-unsicher und zustandsbehaftet - saga.py haelt pro Prozess genau
     EINE Instanz (Modul-Singleton), da alle Invoice-Aufrufe denselben
     Downstream-Service betreffen."""
 
@@ -147,7 +146,7 @@ class CircuitBreaker:
         reset_failures: bool = False,
     ) -> CircuitTransition:
         """Interner Helfer: fuehrt einen Zustandswechsel aus und liefert die
-        CircuitTransition, die der Aufrufer (main.py) als Audit-Snapshot
+        CircuitTransition, die der Aufrufer als Audit-Snapshot
         loggen kann."""
         previous_state = self._circuit.state
         if state == CircuitState.OPEN:

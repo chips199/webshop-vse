@@ -7,9 +7,8 @@ Microservices. Die Umsetzung nutzt Python/FastAPI fuer die Backend-Services,
 React fuer Shop und Admin-Dashboard, PostgreSQL fuer Persistenz, RabbitMQ
 fuer interne Service-Kommunikation und Docker Compose fuer das lokale Deployment.
 
-Die interne Kommunikation wird bewusst event- und command-basiert ueber RabbitMQ
-geplant. Damit weicht das Projekt von der Aufgabenblatt-Empfehlung ab, Shop zu
-Warehouse und Billing synchron per REST aufzurufen. Diese Entscheidung ist in
+Die interne Kommunikation erfolgt event- und command-basiert ueber RabbitMQ.
+Diese Entscheidung ist in
 `docs/decisions/002-rabbitmq-for-service-communication.md` begruendet.
 
 ## 2. Systemkontext
@@ -70,7 +69,7 @@ Payment-Fassade).
 | Shop-Service | Externe Order API, Produktkatalog, correlationId, Order-Status, Saga-Orchestrierung; DB `shop_service` |
 | Warehouse-Service | Bestand verwalten, Reservierung anlegen, stornieren und final ausbuchen; DB `warehouse_service` |
 | Billing-Service | Zahlungsfluss, Payment-Fassade, Checkout-Sessions, Refunds; zustandslos, keine eigene DB |
-| Invoice-Service | PDF-Rechnungserstellung, persistente Invoice-Metadaten und Retry-Mechanismus; DB `invoice_service` |
+| Invoice-Service | Je Command ein PDF-Erstellungsversuch und persistente Invoice-Metadaten; DB `invoice_service` |
 | Audit-Service | Unveraenderliche Audit-Snapshots chronologisch bereitstellen; DB `audit_service` |
 | RabbitMQ | Commands und Domain-Events zwischen Services |
 | PostgreSQL | Persistenz pro Service, mindestens Audit-Snapshot-Speicher |
@@ -130,9 +129,7 @@ noch bevor irgendein RabbitMQ-Schritt der Saga verarbeitet wurde. Die
 gesamte weitere Verarbeitung laeuft asynchron; der Client erfaehrt den
 tatsaechlichen Endstatus erst durch spaeteres Polling von `GET
 /orders/{orderId}` (oder durch die SSE-Echtzeit-Updates im
-Admin-Dashboard, siehe Bonusaufgabe 4.3). Eine synchrone Endantwort wie in
-einer frueheren Version dieses Diagramms (`201 Created` erst nach
-Abschluss der gesamten Saga) entspricht **nicht** der Implementierung.
+Admin-Dashboard). Eine synchrone Endantwort erfolgt nicht.
 
 ```mermaid
 sequenceDiagram
@@ -318,7 +315,7 @@ sequenceDiagram
     Shop-->>Client: 200 OK (status=INVOICE_FAILED)
 ```
 
-### 6.4 Asynchrone Zahlung (PayPal-Webhook, Bonusaufgabe 4.4)
+### 6.4 Asynchrone Zahlung (PayPal-Webhook)
 
 _Quelldatei: [`docs/diagrams/sequenz-fehlerszenario-asynchrone-zahlung.mmd`](diagrams/sequenz-fehlerszenario-asynchrone-zahlung.mmd)_
 
@@ -371,7 +368,7 @@ Anbieter:
   einer echten Stripe Checkout Session; ohne Key sofortiger lokaler Stub.
 - `PayPalAdapter` - mit Credentials immer asynchron per Redirect zur echten
   PayPal-Freigabeseite; ohne Credentials Stub mit simuliertem Webhook
-  (Bonus 4.4, siehe unten).
+  (siehe unten).
 
 Der aktive Anbieter wird per Konfiguration gesetzt, zum Beispiel
 `PAYMENT_PROVIDER=stripe` oder `PAYMENT_PROVIDER=paypal`.
@@ -380,7 +377,7 @@ Adapter registrieren sich automatisch ueber die Basisklasse `PaymentAdapter`.
 Ein weiterer Anbieter wird als neue Adapterklasse mit eigenem `provider_name`
 hinzugefuegt; die Fassade selbst muss dafuer nicht geaendert werden.
 
-### Echter Redirect vs. simulierter Webhook (Bonus 4.4)
+### Echter Redirect vs. simulierter Webhook
 
 Mit Sandbox-Credentials liefert `charge()` bei beiden Anbietern nie sofort ein
 Endergebnis, sondern immer `PaymentStatus.PENDING` mit einer echten
@@ -398,7 +395,7 @@ ist fuer beide Anbieter identisch:
   Session-Pruefung (Stripe) aus und liefert SUCCEEDED/FAILED.
 
 **Nur PayPal** simuliert diesen Ablauf zusaetzlich als Stub, wenn keine
-Credentials gesetzt sind (Bonus 4.4 der Aufgabenstellung): `charge()` liefert
+Credentials gesetzt sind: `charge()` liefert
 PENDING, nach der konfigurierbaren Verzoegerung `ASYNC_PAYMENT_WEBHOOK_DELAY_SECONDS`
 sendet der Stub sich selbst einen Webhook an `POST /webhooks/payment-stub`.
 Stripe bleibt ohne Credentials ein einfacher, sofort erfolgreicher Stub.
@@ -450,10 +447,12 @@ Das Dashboard zeigt:
 ### Invoice-Retry und PDF-Rechnungen
 
 Der Invoice-Service erzeugt PDF-Rechnungen im Retro-Design als echte PDF-Dateien
-und speichert Metadaten in der Tabelle `invoices`. Schlaegt die Erzeugung fehl,
-werden bis zu drei Versuche ausgefuehrt. Jeder weitere Versuch erzeugt ein
-`invoice.retry.scheduled`-Event; nach dem letzten Fehler wird `invoice.failed`
-publiziert und vom Audit-Service als Snapshot persistiert.
+und speichert Metadaten in der Tabelle `invoices`. Pro
+`invoice.create.requested` fuehrt er genau einen Versuch aus und meldet einen
+Fehler mit `invoice.failed`. Der Shop-Service plant anhand von Versuchszahl und
+Circuit-Breaker-Zustand bis zu zwei weitere Versuche und publiziert dafuer
+`invoice.retry.scheduled`. Nach dem letzten Fehlschlag setzt er die Bestellung
+auf `INVOICE_FAILED`.
 
 ### Circuit Breaker fuer den Invoice-Service
 
@@ -510,9 +509,9 @@ Nicht zu aendern:
 - Externe Shop- und Audit-APIs
 - Payment-Fassade und Billing-Kernlogik, sofern sie nur gegen die Fassade programmiert
 
-## 10. Bekannte Architekturabweichung
+## 10. Kommunikationsentscheidung
 
-Das Aufgabenblatt sieht synchrone REST-Aufrufe von Shop zu Warehouse und Billing
-vor. Dieses Projekt nutzt fuer die interne Kommunikation konsequent RabbitMQ.
-Die Abweichung ist bewusst gewaehlt, weil dadurch Saga-Schritte, Kompensation und
-Audit-Snapshots einheitlich ueber Commands und Events abgebildet werden.
+Das Projekt nutzt fuer die interne Kommunikation konsequent RabbitMQ. Dadurch
+werden Saga-Schritte, Kompensation und Audit-Snapshots einheitlich ueber Commands
+und Events abgebildet. REST bleibt auf externe APIs und gezielte Lesezugriffe
+beschraenkt.

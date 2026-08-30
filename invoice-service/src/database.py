@@ -1,9 +1,7 @@
 """Datenbankzugriff des invoice-service.
 
-Eine Tabelle (invoices) mit einem Datensatz je Rechnungs-Versuch: seit der
-Umstellung auf "ein Versuch pro invoice.create.requested" (siehe main.py)
-erzeugt jeder Versuch eine eigene invoice_id/Zeile statt sie ueber mehrere
-interne Retries hinweg wiederzuverwenden.
+Eine Tabelle (invoices) mit einem Datensatz je Rechnungs-Versuch. Jeder
+"invoice.create.requested"-Versuch erzeugt eine eigene invoice_id/Zeile.
 """
 
 from typing import Any
@@ -106,7 +104,7 @@ def mark_invoice_created(invoice_id: str, pdf_path: str, attempts: int) -> None:
 
 def mark_invoice_failed(invoice_id: str, error: str, attempts: int) -> None:
     """Markiert einen Rechnungs-Versuch als fehlgeschlagen (siehe invoice.failed
-    in main.py) - der Retry fuer die naechste attempt-Nummer laeuft ueber
+    in service.py) - der Retry fuer die naechste attempt-Nummer laeuft ueber
     eine neue invoice_id/Zeile, nicht ueber ein Update dieses Datensatzes."""
     query = """
     UPDATE invoices
@@ -119,7 +117,7 @@ def mark_invoice_failed(invoice_id: str, error: str, attempts: int) -> None:
 
 
 def get_invoice(invoice_id: str) -> dict[str, Any] | None:
-    """Liest eine einzelne Rechnung fuer die GET-Endpunkte in main.py aus."""
+    """Liest eine einzelne Rechnung fuer die GET-Endpunkte in routes.py aus."""
     query = """
     SELECT
         id AS "invoiceId",

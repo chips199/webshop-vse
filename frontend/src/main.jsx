@@ -1020,11 +1020,8 @@ function AdminPage() {
     loadAdminProducts();
   }, [session.authenticated]);
 
-  // Echtzeit-Aktualisierung per Server-Sent Events (Bonusaufgabe 4.3): der
-  // manuelle "Aktualisieren"-Button bleibt zusaetzlich erhalten, aber die
-  // Bestellliste und eine gerade geoeffnete Detailansicht aktualisieren sich
-  // jetzt von selbst, sobald sich im Backend etwas an einer Bestellung
-  // aendert - ohne dass der Browser dafuer pollen muss.
+  // Server-Sent Events aktualisieren Bestellliste und geoeffnete Details,
+  // ohne dass der Browser pollen muss.
   useEffect(() => {
     if (!session.authenticated) return undefined;
 

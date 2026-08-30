@@ -14,7 +14,7 @@ from .messaging import build_message, publish_message
 def handle_warehouse_message(message: dict) -> None:
     """Verteilt eingehende Bestand-Commands auf die passende Verarbeitung.
 
-    Drei Nachrichtentypen (siehe Aufgabenblatt 2.2/2.3):
+    Verarbeitete Nachrichtentypen:
       - warehouse.cancel.requested: Reservierung stornieren (Kompensation
         bei abgelehnter Zahlung).
       - warehouse.commit.requested: Reservierung final ausbuchen (nach

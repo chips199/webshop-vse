@@ -38,8 +38,8 @@ class Address(BaseModel):
 
 
 class PaymentSelection(BaseModel):
-    """Zahlungsauswahl aus dem Checkout - `scenario` steuert das im
-    Aufgabenblatt geforderte gezielte Durchspielen von Testszenarien
+    """Zahlungsauswahl aus dem Checkout - `scenario` steuert gezielte
+    Testszenarien
     (happy_path, warehouse_commit_failed, out_of_stock, ...) end-to-end
     durch die ganze Saga."""
 

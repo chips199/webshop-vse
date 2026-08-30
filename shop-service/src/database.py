@@ -5,7 +5,7 @@ Groesster Service, entsprechend die meiste Datenbanklogik: Bestellungen
 Produktkatalog (products, inkl. Seed-Daten) sowie Admin-Authentifizierung
 (admin_users/admin_sessions). Reine SQL-Wrapper-Funktionen ohne Business-
 Logik - die Saga-Entscheidungen (wann welches Event publiziert wird)
-liegen in main.py.
+liegen in saga.py und routes.py.
 """
 
 from collections.abc import Iterable
@@ -409,7 +409,7 @@ PRODUCT_SEED: list[dict[str, str]] = [
 
 def init_database() -> None:
     """Legt alle Tabellen/Indizes an (idempotent) und fuehrt die noetigen
-    ALTER-TABLE-Migrationen fuer spaeter hinzugekommene Spalten aus, bevor
+    ALTER-TABLE-Migrationen aus, bevor
     Produkte und der Admin-User geseedet werden. Wird beim Start von main.py
     (lifespan()) aufgerufen."""
     with psycopg.connect(settings.database_url) as connection:
@@ -455,7 +455,7 @@ def create_order(
 ) -> None:
     """Legt eine neue Bestellung mit Status PENDING an (Start der Saga).
 
-    idempotency_key/request_hash (Bonusaufgabe 4.2) erlauben es main.py,
+    idempotency_key/request_hash erlauben es routes.py,
     einen wiederholten POST /orders mit demselben Idempotency-Key als
     dieselbe Bestellung zu erkennen, statt eine zweite anzulegen.
     """
@@ -592,21 +592,12 @@ def update_warehouse_commit(order_id: str, commit_status: str) -> None:
 def claim_payment_confirmation(order_id: str) -> bool:
     """Beansprucht die einmalige Zahlungsbestaetigung einer Order atomar.
 
-    Der Endpunkt POST /orders/{orderId}/payment-confirmation las den Status
-    zuvor per SELECT und verliess sich auf einen anschliessenden Vergleich in
-    Python - zwischen SELECT und dem Publizieren von
-    billing.payment.confirm.requested lag ein Zeitfenster, in dem ein
-    zweiter (paralleler) Aufruf denselben PAYMENT_ACTION_REQUIRED-Status noch
-    sehen und ebenfalls das Event ausloesen konnte. Bei PayPal fuehrt das im
-    Sandbox-Modus zu einem doppelten capture_order()-Aufruf.
-
     Das WHERE status = 'PAYMENT_ACTION_REQUIRED' macht die Status-Pruefung
     und den Uebergang atomar (Postgres serialisiert konkurrierende UPDATEs
     auf derselben Zeile): nur der zuerst ankommende Aufruf trifft und darf
     das Confirm-Event publizieren, jeder weitere erhaelt False und damit
     einen 409-Conflict, statt einen zweiten Confirm-Request auszuloesen.
-    Ersetzt keine vollstaendige Idempotenzloesung mit Idempotency-Key
-    (Bonusaufgabe 4.2), schliesst aber genau diese Race Condition.
+    Damit wird ein doppelter Confirm- beziehungsweise Capture-Aufruf verhindert.
     """
     query = """
     UPDATE shop_orders
@@ -630,8 +621,8 @@ def complete_order_if_ready(order_id: str) -> bool:
     gesetzt), Rechnung erzeugt (invoice_status = CREATED) und Lagerbestand
     final committed (warehouse_commit_status = SUCCEEDED). Da diese drei
     Events asynchron und in beliebiger Reihenfolge eintreffen koennen, wird
-    diese Funktion nach JEDEM der drei Teilschritte erneut aufgerufen (siehe
-    main.py) - die WHERE-Bedingung macht das Ergebnis unabhaengig von der
+    diese Funktion nach jedem der drei Teilschritte erneut aufgerufen (siehe
+    saga.py) - die WHERE-Bedingung macht das Ergebnis unabhaengig von der
     Aufrufreihenfolge und verhindert per `status <> 'COMPLETED'` einen
     doppelten Abschluss."""
     query = """
@@ -681,8 +672,8 @@ def get_order(order_id: str) -> dict[str, Any] | None:
 
 
 def get_order_by_idempotency_key(idempotency_key: str) -> dict[str, Any] | None:
-    """Sucht eine bereits angelegte Bestellung anhand ihres Idempotency-Keys
-    (Bonusaufgabe 4.2) - main.py nutzt das, um einen wiederholten POST
+    """Sucht eine bereits angelegte Bestellung anhand ihres Idempotency-Keys,
+    um einen wiederholten POST
     /orders mit demselben Key als Duplikat zu erkennen statt eine zweite
     Bestellung anzulegen."""
     query = """
@@ -861,7 +852,7 @@ def update_product(product_id: str, product: dict[str, Any]) -> dict[str, Any] |
 def enrich_items_from_products(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Berechnet Name/Stueckpreis/Zeilensumme je Bestellposition serverseitig
     aus der products-Tabelle (NIE aus Client-Angaben - verhindert
-    Preismanipulation, siehe Aufgabenblatt 5.2). Wirft ValueError, falls eine
+    Preismanipulation). Wirft ValueError, falls eine
     productId nicht (mehr) im aktiven Katalog existiert."""
     product_ids = [item["productId"] for item in items]
     products = _get_products_by_ids(product_ids)
@@ -892,7 +883,7 @@ def calculate_total(items: list[dict[str, Any]]) -> Decimal:
 
 def list_admin_orders(limit: int = 50) -> list[dict[str, Any]]:
     """Liefert die neuesten Bestellungen fuer die Admin-Dashboard-Uebersicht
-    (Zeitraum-Filterung passiert im Frontend/main.py, nicht hier)."""
+    (Zeitraum-Filterung passiert im Frontend, nicht hier)."""
     query = """
     SELECT
         id AS "orderId",
@@ -922,12 +913,7 @@ def list_admin_orders(limit: int = 50) -> list[dict[str, Any]]:
 
 
 def get_audit_snapshots_for_order(order_id: str) -> list[dict[str, Any]]:
-    """Liest die Audit-Timeline direkt per SQL aus der audit_snapshots-Tabelle.
-
-    HINWEIS: main.py nutzt fuer die Admin-Timeline stattdessen
-    fetch_audit_snapshots() (HTTP-Aufruf an audit-service, siehe dort) statt
-    dieser Funktion, um den "kein Service liest fremde Tabellen"-Grundsatz
-    einzuhalten - diese Funktion bleibt als Altlast/Alternative bestehen."""
+    """Liest die Audit-Timeline direkt per SQL aus der audit_snapshots-Tabelle."""
     order = get_order(order_id)
     if order is None:
         return []

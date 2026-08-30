@@ -21,7 +21,7 @@ Onlineshop fuer historische Computerteile als Microservice-Projekt fuer Vertiefu
 | Shop-Service | 8000 | Produktkatalog, Bestellungen, Saga-Koordination, Admin-API |
 | Warehouse-Service | 8001 | Bestand, Reservierung, Commit, Storno |
 | Billing-Service | 8002 | Payment-Fassade, Stripe, PayPal, Async-Stub |
-| Invoice-Service | 8003 | Rechnungserzeugung, PDF-Speicherung, Retry |
+| Invoice-Service | 8003 | Rechnungserzeugung und PDF-Speicherung |
 | Audit-Service | 8004 | Audit-Snapshots und Timeline |
 | RabbitMQ UI | 15672 | Message-Broker-Management |
 | Grafana | 3001 | Zentrales Log-Dashboard |
@@ -124,6 +124,7 @@ Detaildokumente:
 - Architektur: [docs/architecture.md](docs/architecture.md)
 - Event-Kontrakte: [docs/event-contracts.md](docs/event-contracts.md)
 - Log-Management: [docs/log-management.md](docs/log-management.md)
+- Qualitaetssicherung: [docs/quality-assurance.md](docs/quality-assurance.md)
 - ADRs: [docs/decisions](docs/decisions)
 
 ## OpenAPI

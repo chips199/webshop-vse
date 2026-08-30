@@ -3,7 +3,7 @@
 Enthaelt alles, was mit dem Nachrichten-Broker zu tun hat: Verbindungsaufbau
 mit Retry, Event-Umschlag (build_message), Publizieren (publish_message) und
 den Consumer-Loop (consume_messages), der eingehende Saga-Events an
-handle_saga_message() (main.py) weiterreicht. Fachlicher Code importiert nur
+handle_saga_message() in saga.py weiterreicht. Fachlicher Code importiert nur
 diese Funktionen und muss sich nie direkt mit pika beschaeftigen.
 """
 
@@ -24,8 +24,7 @@ from .config import settings
 # Topic-Exchange, ueber den alle Services ihre Events/Commands austauschen.
 EXCHANGE_NAME = "webshop.events"
 # Queue, an die shop-service als "Dirigent" der Choreografie praktisch alle
-# Saga-relevanten Routing-Keys bindet (siehe Aufruf von consume_messages() in
-# main.py).
+# Saga-relevanten Routing-Keys bindet (siehe lifespan() in main.py).
 SHOP_QUEUE_NAME = "shop-service.saga"
 
 logger = logging.getLogger(__name__)

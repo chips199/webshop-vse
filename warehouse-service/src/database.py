@@ -297,7 +297,7 @@ def commit_reservation(order_id: str) -> bool:
 
 def cancel_reservation(order_id: str) -> bool:
     """Storniert eine Reservierung (Saga-Kompensation bei abgelehnter Zahlung
-    oder gezieltem out_of_stock-Testszenario, siehe main.py).
+    oder gezieltem out_of_stock-Testszenario, siehe service.py).
 
     Anders als commit_reservation() wird hier NUR reserved_quantity
     reduziert, quantity_on_hand bleibt unveraendert - die Ware war ja nie

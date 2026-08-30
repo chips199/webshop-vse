@@ -144,11 +144,8 @@ def render_pdf(lines: list[str]) -> bytes:
     ]
     y = 680
     for index, line in enumerate(escaped_lines):
-        # Kein Seitenumbruch implementiert: bei zu vielen Zeilen (sehr lange
-        # Bestellung) werden die untersten Rechnungszeilen schlicht
-        # abgeschnitten (y < 70 = unterer Rand erreicht), statt eine zweite
-        # PDF-Seite zu erzeugen. Fuer den Umfang des Uebungsprojekts
-        # akzeptiert, waere fuer echten Produktivbetrieb aber ein Luecke.
+        # Das Ein-Seiten-Format endet am unteren Rand; weitere Zeilen werden
+        # nicht gerendert.
         if y < 70:
             break
         font_size = 15 if index < 2 else 10  # Titelzeilen (Index 0/1) groesser als der Rest

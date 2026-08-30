@@ -31,17 +31,6 @@ class PaymentFacadeTest(unittest.TestCase):
         self.assertEqual(get_payment_facade("paypal").provider_name, "paypal")
 
     def test_provider_switch_via_configuration(self) -> None:
-        """Anbieterwechsel per Konfiguration (Aufgabenblatt 5.2), nicht per Code.
-
-        Anders als test_selects_stripe_provider/test_selects_paypal_provider
-        oben - die den Provider explizit als Argument uebergeben - ruft dieser
-        Test get_payment_facade() bewusst OHNE Argument auf. Damit greift der
-        `provider or settings.payment_provider`-Fallback in facade.py, und es
-        wird tatsaechlich der ueber settings.payment_provider konfigurierte
-        Default ausgewaehlt - genau der Mechanismus, ueber den ein
-        Anbieterwechsel im Betrieb (per ENV-Variable) laeuft, ohne Code zu
-        aendern.
-        """
         settings.payment_provider = "paypal"
         self.assertEqual(get_payment_facade().provider_name, "paypal")
 
@@ -54,8 +43,7 @@ class PaymentFacadeTest(unittest.TestCase):
         self.assertEqual(result.status, PaymentStatus.SUCCEEDED)
 
     def test_paypal_charge_without_credentials_returns_pending_and_schedules_webhook(self) -> None:
-        # Ohne Sandbox-Credentials ist PayPal ein Stub, der Bonus 4.4 umsetzt:
-        # charge() liefert sofort PENDING, das Ergebnis kommt per Timer-Webhook nach.
+        # Im Stub-Modus kommt das Ergebnis nach PENDING per Timer-Webhook.
         with patch.object(PayPalAdapter, "_schedule_webhook") as schedule_webhook:
             result = get_payment_facade("paypal").charge("order-2", Decimal("49.90"), "EUR")
         self.assertEqual(result.provider, "paypal")
@@ -169,15 +157,7 @@ class PaymentFacadeTest(unittest.TestCase):
         self.assertEqual(payload["status"], "FAILED")
         self.assertEqual(payload["reasonCode"], "ASYNC_DECLINED")
 
-    # -- get_status()-Retry bei technischen Fehlern (Bereinigung Punkt 2) --
-    #
-    # Mit Sandbox-Credentials reichen StripeAdapter/PayPalAdapter technische
-    # Fehler (RuntimeError bei Netzwerk-/HTTP-Problemen) jetzt bis zur
-    # Fassade durch, statt sie selbst in FAILED umzuwandeln. Die folgenden
-    # Tests verifizieren, dass der Retry dadurch tatsaechlich mehrfach
-    # aufruft und am Ende PaymentFacadeError wirft, waehrend eine fachlich
-    # nicht abgeschlossene (aber technisch erfolgreich abgefragte) Zahlung
-    # weiterhin direkt und ohne Retry als FAILED zurueckkommt.
+    # Technische Statusfehler werden wiederholt; fachliche Fehlschlaege nicht.
 
     def test_stripe_get_status_retries_on_technical_error_then_raises(self) -> None:
         settings.stripe_secret_key = "sk_test_dummy"
@@ -225,16 +205,7 @@ class PaymentFacadeTest(unittest.TestCase):
         self.assertEqual(result.status, PaymentStatus.FAILED)
         capture_order.assert_called_once()
 
-    # -- transaction_id-Umschwenk auf die PaymentIntent-Id (Refund-Bugfix) --
-    #
-    # get_status() gab bei einer bezahlten Stripe-Session bisher weiterhin
-    # die Checkout-Session-Id ("cs_...") als transaction_id zurueck. Stripes
-    # Refund-Endpunkt akzeptiert aber nur eine PaymentIntent-Id ("pi_..."),
-    # wodurch refund() mit echten Credentials nie tatsaechlich einen
-    # Refund ausgeloest hat (transaction_id.startswith("pi_") war nie wahr).
-    # Der folgende Test verifiziert, dass get_status() jetzt korrekt auf
-    # "paymentIntentId" umschwenkt, sobald retrieve_session() eine liefert -
-    # analog zum bereits bestehenden captureId-Tausch bei PayPal.
+    # Stripe-Refunds benoetigen die PaymentIntent-ID statt der Session-ID.
 
     def test_stripe_get_status_switches_to_payment_intent_id_on_success(self) -> None:
         settings.stripe_secret_key = "sk_test_dummy"

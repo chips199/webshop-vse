@@ -3,8 +3,7 @@
 Quelldateien (Mermaid) der Diagramme aus `docs/architecture.md`. Die
 gerenderten Diagramme selbst sind zur besseren Lesbarkeit weiterhin inline in
 `architecture.md` eingebettet; hier liegen sie zusaetzlich als eigenstaendige
-`.mmd`-Dateien gemaess der geforderten Repository-Struktur (Aufgabenblatt
-Abschnitt 6.1).
+`.mmd`-Dateien.
 
 | Datei | Diagrammtyp | Abschnitt in architecture.md |
 | --- | --- | --- |
@@ -15,7 +14,7 @@ Abschnitt 6.1).
 | `sequenz-fehlerszenario-zahlung-abgelehnt.mmd` | Sequenzdiagramm (Fehlerszenario) | 6.2 Zahlung abgelehnt |
 | `sequenz-fehlerszenario-rechnung-fehlgeschlagen.mmd` | Sequenzdiagramm (Fehlerszenario) | 6.3 Invoice-Service nicht erreichbar |
 | `sequenz-fehlerszenario-asynchrone-zahlung.mmd` | Sequenzdiagramm (Fehlerszenario) | 6.4 Asynchrone Zahlung |
-| `sequenz-fehlerszenario-warehouse-commit-fehlgeschlagen.mmd` | Sequenzdiagramm (zusaetzlich, nicht in der Arbeitsgrundlage gefordert) | - |
+| `sequenz-fehlerszenario-warehouse-commit-fehlgeschlagen.mmd` | Sequenzdiagramm (Fehlerszenario) | - |
 
 Jede `.mmd`-Datei laesst sich z.B. mit dem [Mermaid Live Editor](https://mermaid.live)
 oder `mmdc` (mermaid-cli) unabhaengig rendern.

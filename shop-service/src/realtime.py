@@ -1,15 +1,13 @@
 """In-Process Pub/Sub fuer die Echtzeit-Aktualisierung des Admin-Dashboards.
 
-Bonusaufgabe 4.3 verlangt "Echtzeit-Aktualisierung per Server-Sent Events
-oder WebSocket" statt eines manuellen Reloads. Die eigentlichen
 Zustandsaenderungen einer Bestellung passieren im RabbitMQ-Consumer-Thread
-(handle_saga_message in main.py, synchroner Code in einem eigenen
+(handle_saga_message in saga.py, synchroner Code in einem eigenen
 threading.Thread), die SSE-Verbindungen laufen dagegen im asyncio-Event-Loop
 von FastAPI/Uvicorn. Dieses Modul ist die duenne, thread-sichere Bruecke
 dazwischen:
 
 - publish() wird aus dem Consumer-Thread aufgerufen (Producer).
-- subscribe()/unsubscribe() werden aus dem SSE-Endpunkt aufgerufen (main.py),
+- subscribe()/unsubscribe() werden aus dem SSE-Endpunkt in routes.py aufgerufen,
   je einmal pro offener Browser-Verbindung.
 
 queue.Queue ist bereits von Haus aus thread-safe, daher reicht ein einfaches

@@ -19,12 +19,9 @@ logger = logging.getLogger(__name__)
 def handle_invoice_message(message: dict) -> None:
     """Verarbeitet EIN "invoice.create.requested"-Command mit genau einem Versuch.
 
-    Wichtig: invoice-service selbst wiederholt NICHT mehr intern (frueher gab es
-    hier eine 3-malige Retry-Schleife samt "invoice.retry.scheduled"). Die
-    Retry-Orchestrierung gehoert fachlich in die Shop-Saga: nur shop-service kennt
-    den Zustand des zugehoerigen Circuit Breakers (Bonusaufgabe 4.1) und kann
-    entscheiden, ob/wann ein weiterer Versuch sinnvoll ist. Schlaegt die
-    Rechnungserstellung hier fehl, wird deshalb sofort (nach genau einem Versuch)
+    Die Retry-Orchestrierung liegt in der Shop-Saga, da nur shop-service den
+    Zustand des zugehoerigen Circuit Breakers kennt. Schlaegt die
+    Rechnungserstellung fehl, wird nach genau einem Versuch
     "invoice.failed" veroeffentlicht - inklusive "attempt" und der fachlichen
     Zahlungsdaten (provider/amount/currency/scenario), damit shop-service daraus
     bei Bedarf einen neuen "invoice.create.requested" mit attempt+1 bauen kann,

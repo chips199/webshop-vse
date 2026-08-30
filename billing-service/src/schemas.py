@@ -28,8 +28,7 @@ class AsyncPaymentWebhookRequest(BaseModel):
 
     Wird ausschliesslich vom PayPalAdapter selbst geschickt (siehe
     _send_webhook() in payment/adapters.py), simuliert damit den
-    asynchronen Webhook-Callback eines echten Zahlungsanbieters
-    (Bonusaufgabe 4.4).
+    asynchronen Webhook-Callback eines echten Zahlungsanbieters.
     """
 
     orderId: str

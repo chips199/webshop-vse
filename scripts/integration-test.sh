@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
-# Integrationstests fuer den Bestellprozess (Aufgabenblatt 5.2):
-# "Integrationstests fuer den Bestellprozess: Happy Path und mindestens zwei
-# Fehlerszenarien."
-#
+# Integrationstests fuer Happy Path und Fehlerszenarien des Bestellprozesses.
 # Laeuft gegen einen bereits per `docker compose up` gestarteten Stack (siehe
 # root README.md, Abschnitt "Tests"). Anders als scripts/smoke-test.sh (das
 # nur grob prueft, ob alles erreichbar ist und EIN Happy-Path-Auftrag

@@ -7,7 +7,7 @@ Accepted
 ## Context
 
 Das Projekt soll mehrere Microservices, API-Dokumentation, Messaging, Persistenz,
-lokales Deployment und spaeter ein Frontend abdecken. Der Stack soll fuer eine
+lokales Deployment und ein Frontend abdecken. Der Stack soll fuer eine
 Studierendengruppe gut wartbar und lokal reproduzierbar sein.
 
 ## Decision
@@ -30,7 +30,7 @@ fuer kleine, klar geschnittene Microservices geeignet. PostgreSQL erfuellt die
 Pflichtanforderung einer relationalen Datenbank und passt gut zum
 Audit-Snapshot-Modell. Die Services nutzen getrennte Datenbanknamen
 (`shop_service`, `warehouse_service`, `invoice_service`, `audit_service`),
-damit Ownership und spaetere Migrationen pro Service nachvollziehbar bleiben.
+damit Ownership und Migrationen pro Service nachvollziehbar bleiben.
 Billing-Service ist bewusst zustandslos und hat keine eigene Datenbank - er
 liest Zahlungsstatus bei Bedarf direkt beim Zahlungsanbieter (Stripe/PayPal)
 aus statt ihn selbst zu persistieren. Docker Compose macht die Abgabe in

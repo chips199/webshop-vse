@@ -16,9 +16,7 @@ class HealthResponse(BaseModel):
 
 
 class AuditSnapshot(BaseModel):
-    """Antwort-Schema fuer einen einzelnen Snapshot - Felder 1:1 wie in
-    Aufgabenblatt 3.2 gefordert (correlationId, eventType, service,
-    timestamp, payload, previousEventId, actor, statusCode)."""
+    """Antwort-Schema fuer einen einzelnen Snapshot."""
 
     id: UUID
     correlationId: UUID

@@ -99,7 +99,7 @@ async def create_order(request: Request, order: CreateOrderRequest) -> OrderResp
     (warehouse.reserve.requested). 202 Accepted statt 201/200, da die
     Verarbeitung danach vollstaendig asynchron ueber RabbitMQ weiterlaeuft.
 
-    idempotency_key/request_hash (Bonusaufgabe 4.2): ist ein Idempotency-Key-
+    Ist ein Idempotency-Key-
     Header gesetzt und wurde er schon einmal fuer denselben Request-Body
     verwendet, wird die bereits angelegte Bestellung zurueckgegeben statt
     eine zweite anzulegen; bei gleichem Key aber anderem Body gibt es 409.
@@ -148,7 +148,7 @@ async def create_order(request: Request, order: CreateOrderRequest) -> OrderResp
         # versuchen nun gleichzeitig, die Bestellung anzulegen - der
         # eindeutige Index auf idempotency_key (siehe database.py) laesst
         # nur den ersten INSERT durch. Statt den Fehler durchzureichen, wird
-        # hier die (vom parallelen Request inzwischen angelegte) Bestellung
+        # hier die vom konkurrierenden Request angelegte Bestellung
         # nachgeladen und wie ein normaler Idempotenz-Treffer behandelt.
         if not idempotency_key:
             raise
@@ -339,7 +339,7 @@ async def admin_order_audit(orderId: str, _: str = Depends(require_admin)) -> Ad
 
 @router.get("/admin/orders/events")
 async def admin_orders_events(request: Request, _: str = Depends(require_admin)) -> StreamingResponse:
-    """Server-Sent-Events-Stream fuer Echtzeit-Updates im Admin-Dashboard (Bonus 4.3).
+    """Server-Sent-Events-Stream fuer Echtzeit-Updates im Admin-Dashboard.
 
     Statt bei jeder Aenderung den vollen Bestellzustand zu pushen (was hier
     doppelte Business-Logik ggue. den bestehenden REST-Endpunkten bedeuten

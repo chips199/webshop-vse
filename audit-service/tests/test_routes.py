@@ -6,10 +6,6 @@ from src.routes import get_order_audit_timeline, health
 
 
 class AuditRoutesTest(unittest.IsolatedAsyncioTestCase):
-    """Router-Tests fuer audit-service - health() ist trivial, aber
-    get_order_audit_timeline() serialisiert DB-Zeilen in AuditSnapshot-Objekte
-    und sollte darum nicht ungetestet bleiben (bislang gar nicht abgedeckt)."""
-
     async def test_health_returns_configured_service_name(self) -> None:
         response = await health()
         self.assertEqual(response.status, "ok")

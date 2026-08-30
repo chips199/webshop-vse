@@ -4,9 +4,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Zentrale Konfiguration des shop-service.
 
-    Alle Werte kommen ausschliesslich aus Umgebungsvariablen bzw. der
-    ".env"-Datei - keine hartcodierten Werte im Code (Vorgabe 5.2 der
-    Aufgabenstellung). shop-service ist der groesste Service (Saga-
+    Alle Werte kommen aus Umgebungsvariablen bzw. der ".env"-Datei.
+    shop-service deckt mehrere Bereiche ab (Saga-
     Choreografie, Payment-Facade/Circuit-Breaker, Admin-Dashboard), daher
     entsprechend viele Konfigurationswerte.
     """
@@ -24,25 +23,21 @@ class Settings(BaseSettings):
     # Lagerbestand-Anzeige.
     audit_service_url: str = "http://localhost:8004"
     warehouse_service_url: str = "http://localhost:8001"
-    # Circuit-Breaker-Parameter fuer request_invoice_with_circuit() (Bonusaufgabe
-    # 4.1): nach failure_threshold aufeinanderfolgenden Fehlern OPEN, nach
+    # Circuit-Breaker-Parameter fuer request_invoice_with_circuit(): nach
+    # failure_threshold aufeinanderfolgenden Fehlern OPEN, nach
     # reset_seconds Wartezeit HALF_OPEN, dort maximal half_open_max_calls
     # Testanfragen bevor wieder CLOSED oder erneut OPEN.
     invoice_circuit_breaker_failure_threshold: int = 3
     invoice_circuit_breaker_reset_seconds: float = 30.0
     invoice_circuit_breaker_half_open_max_calls: int = 1
-    # Retry-Orchestrierung fuer die Rechnungserstellung: gehoert zur Shop-Saga
-    # (nicht mehr zu invoice-service, siehe schedule_invoice_retry() in main.py).
+    # Retry-Orchestrierung fuer die Rechnungserstellung in der Shop-Saga.
     # invoice_max_retries: wie oft (inkl. Erstversuch) insgesamt versucht wird,
     # bevor eine Bestellung endgueltig als INVOICE_FAILED markiert wird.
     invoice_max_retries: int = 3
-    # Backoff zwischen zwei Versuchen in Sekunden, linear mit der Versuchsnummer
-    # multipliziert (0.2s, 0.4s, ...) - entspricht dem Verhalten, das frueher
-    # intern in invoice-service lag.
+    # Backoff zwischen zwei Versuchen in Sekunden, linear mit der
+    # Versuchsnummer multipliziert (0.2s, 0.4s, ...).
     invoice_retry_backoff_seconds: float = 0.2
-    # Admin-Login (siehe admin_login()/admin_session in main.py) - bewusst
-    # simpel (kein echtes User-Management), da fuer diese Uebung nur EIN
-    # Admin-Zugang benoetigt wird.
+    # Zugangsdaten und Sitzungsdauer fuer den einzelnen Admin-Account.
     admin_username: str = "admin"
     admin_password: str = "admin123"
     admin_session_hours: int = 8

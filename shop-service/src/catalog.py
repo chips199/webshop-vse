@@ -4,8 +4,8 @@ Bewusst simpel gehalten (kein eigener Produkt-Service): fest hinterlegte
 Preise/Namen zu bekannten Produkt-IDs, mit einem Fallback-Eintrag fuer
 alle unbekannten IDs. Wird von create_order() genutzt, um aus reinen
 productId/quantity-Angaben vollstaendige Bestellpositionen inkl. Preisen
-zu berechnen (Preise kommen NIE vom Client, siehe Aufgabenblatt 5.2 -
-Server-seitige Preisberechnung verhindert Manipulation durch den Client).
+zu berechnen. Die serverseitige Preisberechnung verhindert Manipulation
+durch den Client.
 """
 
 from decimal import Decimal

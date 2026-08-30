@@ -2,8 +2,8 @@
 
 Reine Zusammensetzung: erzeugt die FastAPI-App, verdrahtet Middleware,
 Fehler-Handler und den RabbitMQ-Consumer-Thread, und bindet den HTTP-Router
-ein. Business-Logik gibt es hier bewusst nicht - audit-service ist laut
-Aufgabenblatt 3.2 ein generischer Event-Sink OHNE Business-Wissen ueber Shop
+ein. Business-Logik gibt es hier nicht: audit-service ist ein generischer
+Event-Sink ohne Business-Wissen ueber Shop
 oder Zahlung: er bindet sich auf JEDE Nachricht auf dem gemeinsamen Exchange
 (Routing-Key "#", siehe messaging.py) und speichert sie unveraendert als
 Audit-Snapshot (insert_snapshot_from_message() in database.py, der
@@ -77,7 +77,7 @@ app.add_middleware(
 @app.middleware("http")
 async def correlation_id_middleware(request: Request, call_next):
     """Liest X-Correlation-Id aus eingehenden Requests oder erzeugt eine neue,
-    haengt sie an die Response an (Aufgabenblatt 3.3/9.3)."""
+    und haengt sie an die Response an."""
     correlation_id = request.headers.get("X-Correlation-Id") or str(uuid4())
     request.state.correlation_id = correlation_id
     response: Response = await call_next(request)

@@ -73,8 +73,7 @@ class StripeAdapter(PaymentAdapter):
 
     charge() legt eine echte Stripe Checkout Session an und liefert PENDING
     mit redirect_url zur echten Sandbox-Zahlungsseite. Ohne Credentials bleibt
-    Stripe der einfache, sofort erfolgreiche lokale Stub (Bonus 4.4 wird
-    ausschliesslich ueber PayPal abgedeckt, siehe PayPalAdapter).
+    Stripe ein sofort erfolgreicher lokaler Stub.
     """
 
     provider_name = "stripe"
@@ -166,8 +165,7 @@ class StripeAdapter(PaymentAdapter):
             if session.get("paymentStatus") == "paid":
                 # Wie PayPalAdapter.get_status() bei Erfolg auf die captureId
                 # umschwenkt, geben wir hier auf die PaymentIntent-ID
-                # ("pi_...") aus - nicht mehr auf die urspruengliche Session-
-                # ID. Nur die PaymentIntent-ID akzeptiert Stripes Refund-
+                # ("pi_...") aus. Nur die PaymentIntent-ID akzeptiert Stripes Refund-
                 # Endpunkt (siehe refund() oben); ohne diesen Tausch waere
                 # ein spaeterer echter Refund nie moeglich, da die Session-ID
                 # dafuer nicht funktioniert.
@@ -315,8 +313,7 @@ class PayPalAdapter(PaymentAdapter):
     get_status() (= Capture) aufruft. Ohne Credentials simuliert der Stub
     denselben Ablauf: charge() liefert PENDING, nach einer konfigurierbaren
     Verzoegerung schickt der Stub sich selbst einen Webhook-Request, der das
-    Ergebnis auf herkoemmlichem Weg (POST /webhooks/payment-stub) auftreten
-    laesst (Bonus 4.4 aus der Aufgabenstellung).
+    Ergebnis ueber POST /webhooks/payment-stub meldet.
     """
 
     provider_name = "paypal"
@@ -338,7 +335,7 @@ class PayPalAdapter(PaymentAdapter):
         ueber einen spaeteren get_status()/capture_order()-Aufruf, (3) ohne
         Credentials simuliert der Stub denselben asynchronen Ablauf selbst:
         PENDING zurueckgeben und einen verzoegerten Webhook an sich selbst
-        planen (siehe _schedule_webhook, Bonus 4.4).
+        planen (siehe _schedule_webhook).
         """
         payment_metadata = payment_metadata or {}
         simulated = _simulated_result(self.provider_name, order_id, payment_metadata)
@@ -526,7 +523,7 @@ class PayPalAdapter(PaymentAdapter):
         }
 
     def _schedule_webhook(self, payload: dict) -> None:
-        """Plant den verzoegerten Selbst-Webhook fuer den Stub-Modus (Bonus 4.4).
+        """Plant den verzoegerten Selbst-Webhook fuer den Stub-Modus.
 
         threading.Timer statt asyncio/Celery, weil der Rest von adapters.py
         ohnehin synchron ist und der billing-service dafuer keine
@@ -542,7 +539,7 @@ class PayPalAdapter(PaymentAdapter):
     def _send_webhook(self, payload: dict) -> None:
         """Schickt den simulierten Webhook-Callback an den eigenen Service.
 
-        Landet bei POST /webhooks/payment-stub in main.py, genau wie es ein
+        Landet bei POST /webhooks/payment-stub in routes.py, genau wie es ein
         echter Zahlungsanbieter per HTTP-Callback tun wuerde. Laeuft im
         Timer-Thread (siehe _schedule_webhook) - ein Fehlschlag wird nur
         geloggt, nicht weiter eskaliert, da es hier keinen Aufrufer mehr

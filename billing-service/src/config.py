@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     stripe_secret_key: str | None = None
     stripe_payment_method: str = "pm_card_visa"
     # Ohne beide PayPal-Werte laeuft PayPalAdapter im lokalen Stub-Modus
-    # inkl. des asynchronen Webhook-Ablaufs (Bonus 4.4).
+    # inklusive asynchronem Webhook-Ablauf.
     paypal_client_id: str | None = None
     paypal_client_secret: str | None = None
     paypal_base_url: str = "https://api-m.sandbox.paypal.com"
@@ -47,9 +47,7 @@ class Settings(BaseSettings):
     # Kommagetrennte Liste erlaubter CORS-Origins fuer die Browser-Aufrufe
     # ans Frontend (siehe CORSMiddleware in main.py). Bewusst als eigene,
     # konfigurierbare Einstellung statt aus shop_frontend_base_url
-    # abgeleitet: so kann z.B. in einem Deployment eine echte Domain
-    # gesetzt werden, ohne Code zu aendern (Vorgabe 5.2 der Aufgabenstellung
-    # - keine hartcodierten Werte im Code).
+    # abgeleitet, damit ein Deployment mehrere Origins erlauben kann.
     cors_allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     # Steuerung des Retry-mit-Backoff-Verhaltens der PaymentFacade (siehe
     # PaymentFacade._execute() in payment/facade.py).

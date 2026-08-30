@@ -4,9 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Zentrale Konfiguration des invoice-service.
 
-    Alle Werte kommen ausschliesslich aus Umgebungsvariablen bzw. der
-    ".env"-Datei - keine hartcodierten Werte im Code (Vorgabe 5.2 der
-    Aufgabenstellung).
+    Alle Werte kommen aus Umgebungsvariablen bzw. der ".env"-Datei.
     """
 
     # pydantic-settings liest Werte automatisch aus ENV-Variablen (Name in
@@ -23,12 +21,11 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://webshop:webshop@localhost:5432/webshop"
     rabbitmq_url: str = "amqp://webshop:webshop@localhost:5672/"
     # Verzeichnis, in dem die erzeugten Rechnungs-PDFs abgelegt werden
-    # (siehe create_invoice_pdf() in main.py). Im Container per Docker-Volume
+    # (siehe create_invoice_pdf() in pdf.py). Im Container per Docker-Volume
     # gemountet, damit die PDFs einen Container-Neustart ueberstehen.
     invoice_output_dir: str = "invoices"
-    # invoice_max_retries lebt bewusst NICHT mehr hier: invoice-service macht pro
-    # "invoice.create.requested" genau einen Versuch, die Retry-Anzahl/-Orchestrierung
-    # gehoert zur Shop-Saga (siehe shop-service/src/config.py, invoice_max_retries).
+    # Pro "invoice.create.requested" wird genau ein Versuch ausgefuehrt;
+    # Retry-Anzahl und -Orchestrierung gehoeren zur Shop-Saga.
 
 
 # Einmal beim Modul-Import erzeugte, ueberall importierbare Singleton-Instanz

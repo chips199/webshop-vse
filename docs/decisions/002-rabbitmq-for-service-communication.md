@@ -6,9 +6,9 @@ Accepted
 
 ## Context
 
-Das Aufgabenblatt fordert asynchrone Kommunikation fuer Domain-Events und gibt
-REST fuer einzelne interne Service-Aufrufe vor. Die Gruppe moechte RabbitMQ als
-zentrales Kommunikationsmittel verwenden.
+Das System benoetigt asynchrone Domain-Events und eine nachvollziehbare
+Kommunikation zwischen den Services. RabbitMQ dient als zentrales
+Kommunikationsmittel.
 
 ## Decision
 
@@ -19,13 +19,14 @@ Commands fordern Arbeit an, Events dokumentieren Ergebnisse. Jeder Message
 Envelope enthaelt `messageId`, `correlationId`, `type`, `sourceService`,
 `timestamp`, `payload` und `previousEventId`.
 
-Fehler, die retryfaehig sind, werden ebenfalls ueber RabbitMQ sichtbar gemacht,
-zum Beispiel durch `invoice.retry.scheduled`. Der Invoice-Service versucht die
-PDF-Erzeugung mehrfach und publiziert erst danach ein finales `invoice.failed`.
+Retryfaehige Fehler werden ebenfalls ueber RabbitMQ sichtbar gemacht, zum
+Beispiel durch `invoice.retry.scheduled`. Der Invoice-Service fuehrt pro
+`invoice.create.requested` genau einen Versuch aus und publiziert bei einem
+Fehler `invoice.failed`. Der Shop-Service plant anhand von Versuchszahl und
+Circuit-Breaker-Zustand einen weiteren Versuch oder setzt den Endstatus.
 
 ## Consequences
 
-Diese Entscheidung entkoppelt Services staerker und macht Audit-Events
-einheitlich. Sie fuehrt aber bewusst zu einer Abweichung von der REST-Vorgabe im
-Aufgabenblatt. Diese Abweichung muss im Bericht und in der Praesentation offen
-begruendet werden.
+Diese Entscheidung entkoppelt Services und vereinheitlicht Saga- sowie
+Audit-Events. Synchrone REST-Aufrufe bleiben auf externe APIs und gezielte
+Lesezugriffe beschraenkt.

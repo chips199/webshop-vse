@@ -67,7 +67,7 @@ werden.
   `PaymentFacade`-Aufrufe an den Provider-Adapter
 - `PAYMENT_RETRY_BACKOFF_SECONDS` - Basis-Wartezeit zwischen diesen Retries
 
-## Echter Sandbox-Redirect vs. simulierter Webhook (Bonus 4.4)
+## Echter Sandbox-Redirect vs. simulierter Webhook
 
 Mit gesetzten Sandbox-Credentials loest keiner der beiden Adapter `charge()`
 synchron auf - beide liefern immer `PENDING`:
@@ -87,7 +87,7 @@ aufruft (echte Stripe-Session-Pruefung / PayPal-Capture), um die Zahlung
 abzuschliessen.
 
 Nur `PayPalAdapter` simuliert diesen asynchronen Ablauf zusaetzlich ohne
-Credentials (Bonus 4.4): nach `ASYNC_PAYMENT_WEBHOOK_DELAY_SECONDS` sendet
+Credentials: Nach `ASYNC_PAYMENT_WEBHOOK_DELAY_SECONDS` sendet
 der Stub sich selbst einen Aufruf an `ASYNC_PAYMENT_WEBHOOK_URL`
 (`POST /webhooks/payment-stub`). billing-service publiziert daraufhin
 `billing.payment.succeeded` oder `billing.payment.failed`, und die

@@ -47,8 +47,8 @@ SUCCEEDED/FAILED. Damit reicht die bestehende Dreier-Fassade
 "Zahlung nach Redirect bestaetigen" noetig, `getStatus` uebernimmt diese Rolle
 sinnvoll mit.
 
-Nur `PayPalAdapter` bietet zusaetzlich ohne Credentials einen asynchronen Stub
-(Bonus 4.4 der Aufgabenstellung, asynchroner Webhook-Anbieter): `charge()`
+Nur `PayPalAdapter` bietet zusaetzlich ohne Credentials einen asynchronen Stub:
+`charge()`
 liefert `PENDING` und plant per `threading.Timer` einen Selbst-Webhook an
 `POST /webhooks/payment-stub` nach `ASYNC_PAYMENT_WEBHOOK_DELAY_SECONDS`;
 dieser Webhook uebersetzt das Ergebnis wie gehabt in

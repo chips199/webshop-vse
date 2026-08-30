@@ -71,7 +71,7 @@ register_problem_handlers(app)
 @app.middleware("http")
 async def correlation_id_middleware(request: Request, call_next):
     """Liest X-Correlation-Id aus eingehenden Requests oder erzeugt eine neue,
-    haengt sie an die Response an (Aufgabenblatt 3.3/9.3)."""
+    und haengt sie an die Response an."""
     correlation_id = request.headers.get("X-Correlation-Id") or str(uuid4())
     request.state.correlation_id = correlation_id
     response: Response = await call_next(request)

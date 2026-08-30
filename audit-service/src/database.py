@@ -1,8 +1,7 @@
 """Datenbankzugriff des audit-service.
 
 Genau eine Tabelle (audit_snapshots), ausschliesslich INSERT und SELECT -
-niemals UPDATE oder DELETE (Aufgabenblatt 3.2/9.3: "Snapshots sind nach dem
-Einfuegen unveraenderlich"). Das ist die technische Grundlage fuer
+niemals UPDATE oder DELETE. Das ist die technische Grundlage fuer
 Event Sourcing Light: die Tabelle ist ein Append-Only-Log, der aktuelle
 Zustand einer Bestellung ergibt sich erst durch das Lesen/Zusammensetzen
 aller ihrer Snapshots (siehe get_snapshots_by_correlation_id()).
@@ -58,8 +57,8 @@ def init_database() -> None:
 def get_snapshots_by_correlation_id(correlation_id: str) -> Iterable[dict[str, Any]]:
     """Liefert alle Snapshots einer Bestellung chronologisch sortiert.
 
-    Implementiert den geforderten Endpunkt GET /audit/orders/{correlationId}
-    (siehe main.py). ORDER BY timestamp, created_at: timestamp stammt aus
+    Wird vom Endpunkt GET /audit/orders/{correlationId} verwendet.
+    ORDER BY timestamp, created_at: timestamp stammt aus
     der urspruenglichen Nachricht (kann bei zwei Events in derselben
     Millisekunde gleich sein), created_at ist der DB-Insert-Zeitpunkt und
     sorgt in diesem Fall fuer eine stabile, wirklich chronologische
@@ -96,8 +95,7 @@ def insert_snapshot_from_message(message: dict[str, Any]) -> None:
     direkt als Snapshot-id verwendet: "ON CONFLICT (id) DO NOTHING" macht den
     Insert idempotent, falls dieselbe Nachricht (z.B. nach einem RabbitMQ-
     Requeue) zweimal ankommt - es entsteht kein doppelter Snapshot, und es
-    ist explizit kein UPDATE, das die geforderte Unveraenderlichkeit
-    verletzen wuerde.
+    ist explizit kein UPDATE, das die Unveraenderlichkeit verletzen wuerde.
     """
     query = """
     INSERT INTO audit_snapshots (
@@ -143,7 +141,7 @@ def insert_snapshot_from_message(message: dict[str, Any]) -> None:
 
 
 def _status_code_for(message_type: str) -> str:
-    """Leitet das geforderte statusCode-Feld (SUCCESS/FAILURE/...) rein aus
+    """Leitet das statusCode-Feld (SUCCESS/FAILURE/...) rein aus
     dem Nachrichtentyp-String ab - bewusst nur Substring-Muster, keine feste
     Liste aller Typen, damit neue Event-Typen in anderen Services nicht auch
     noch hier nachgepflegt werden muessen (audit-service bleibt generisch

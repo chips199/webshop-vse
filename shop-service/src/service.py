@@ -3,7 +3,7 @@
 Enthaelt die Business-Logik, die von den Router-Funktionen in routes.py
 gebraucht wird, aber nicht selbst HTTP-spezifisch ist: Admin-Session-
 Handling (Token-Hashing, require_admin-Dependency), Idempotency-Key-
-Verarbeitung (Bonusaufgabe 4.2) und Serialisierung von DB-Datensaetzen in
+Verarbeitung und Serialisierung von DB-Datensaetzen in
 die jeweiligen Response-Schemas. Die Saga-/Consumer-seitige Business-Logik
 (RabbitMQ-Events) liegt getrennt in saga.py.
 """
@@ -40,8 +40,11 @@ async def require_admin(request: Request) -> str:
 
 
 def _idempotency_key_from_request(request: Request) -> str | None:
-    """Liest und validiert den optionalen Idempotency-Key-Header (Bonusaufgabe
-    4.2). None, falls der Header fehlt; 400, falls er leer oder zu lang ist."""
+    """Liest und validiert den optionalen Idempotency-Key-Header.
+
+    Gibt None zurueck, falls der Header fehlt, und 400 bei leerem oder zu
+    langem Wert.
+    """
     value = request.headers.get("Idempotency-Key")
     if value is None:
         return None
@@ -128,11 +131,7 @@ def _serialize_order(order: dict) -> dict:
 
 
 def _serialize_snapshot(snapshot: dict) -> dict:
-    """Waere das Gegenstueck zu _serialize_order() fuer Audit-Snapshots (UUID/
-    Zeitstempel-Konvertierung). HINWEIS: aktuell ungenutzt, da
-    admin_order_audit() (routes.py) die bereits fertig serialisierten
-    Snapshots per fetch_audit_snapshots() (HTTP-JSON von audit-service)
-    bezieht statt diese Funktion auf ein DB-Ergebnis anzuwenden."""
+    """Serialisiert UUIDs und Zeitstempel eines Audit-Snapshots."""
     return {
         **snapshot,
         "id": str(snapshot["id"]),

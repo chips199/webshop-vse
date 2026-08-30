@@ -3,8 +3,8 @@
 Enthaelt die zentrale Verteil-/Entscheidungslogik der Shop-Saga
 (handle_saga_message()) sowie alle Hilfsfunktionen, die dabei gebraucht
 werden: Echtzeit-Benachrichtigung des Admin-Dashboards, den
-Circuit-Breaker-gated Rechnungs-Aufruf samt Retry-Orchestrierung
-(Bonusaufgabe 4.1) und die Vollstaendigkeitspruefung fuer order.completed.
+Circuit-Breaker-gated Rechnungs-Aufruf samt Retry-Orchestrierung und die
+Vollstaendigkeitspruefung fuer order.completed.
 Die zwei HTTP-Endpunkte, die ebenfalls einen Saga-Schritt anstossen
 (create_order(), confirm_order_payment() in routes.py), rufen
 notify_admin_dashboard() direkt von hier auf.
@@ -52,8 +52,7 @@ def handle_saga_message(message: dict) -> None:
     payload = message.get("payload", {})
     correlation_id = message["correlationId"]
 
-    # Admin-Dashboard-Echtzeit-Update (Bonusaufgabe 4.3): bewusst EIN
-    # generischer Hook direkt hier statt eines eigenen Aufrufs in jedem der
+    # Ein generischer Hook ersetzt eigene Dashboard-Aufrufe in jedem der
     # vielen if-Zweige unten - fast jede Saga-Nachricht traegt eine orderId
     # im Payload, und dem Dashboard reicht "fuer diese Bestellung hat sich
     # etwas getan, bitte neu laden" (siehe realtime.py). Laeuft im
@@ -149,17 +148,14 @@ def handle_saga_message(message: dict) -> None:
     if message_type == "invoice.failed":
         order_id = payload["orderId"]
         # attempt kommt von invoice-service durchgereicht (siehe dortiges
-        # handle_invoice_message) - Default 1 nur zur Absicherung, falls eine
-        # aeltere/fremde Nachricht ohne dieses Feld hereinkommt.
+        # handle_invoice_message); Default 1 sichert Nachrichten ohne Feld ab.
         attempt = payload.get("attempt", 1)
         transition = invoice_circuit_breaker.record_failure(payload.get("reasonCode", "INVOICE_FAILED"))
         publish_invoice_circuit_transition(correlation_id, order_id, transition, message["messageId"])
 
         if attempt < settings.invoice_max_retries:
             # Noch Versuche uebrig: Bestellung bleibt (sichtbar) im Retry-Zustand,
-            # und die Shop-Saga plant selbst den naechsten Versuch (siehe
-            # schedule_invoice_retry) - invoice-service haelt dafuer keinen
-            # eigenen Zustand mehr.
+            # und die Shop-Saga plant selbst den naechsten Versuch.
             update_order_status(order_id, "INVOICE_RETRY_PENDING")
             schedule_invoice_retry(order_id, correlation_id, payload, message, attempt)
         else:
@@ -324,9 +320,8 @@ def schedule_invoice_retry(
 ) -> None:
     """Plant nach kurzem Backoff einen weiteren Rechnungs-Versuch.
 
-    Diese Retry-Orchestrierung sitzt bewusst hier in der Shop-Saga und nicht
-    mehr in invoice-service: nur shop-service kennt den Zustand des
-    Circuit Breakers fuer Invoice-Aufrufe (Bonusaufgabe 4.1) und damit, ob ein
+    Die Retry-Orchestrierung sitzt in der Shop-Saga, da nur shop-service den
+    Zustand des Circuit Breakers fuer Invoice-Aufrufe kennt und damit, ob ein
     weiterer Versuch aktuell ueberhaupt sinnvoll ist. Der eigentliche
     Retry-Aufruf laeuft in einem eigenen Timer-Thread ab (wie z.B. auch der
     verzoegerte Webhook in billing-service), damit der Nachrichten-Consumer

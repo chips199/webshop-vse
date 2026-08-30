@@ -6,9 +6,9 @@ Accepted
 
 ## Context
 
-Das Aufgabenblatt fordert unveraenderliche Audit-Snapshots mit chronologischer
-Abfrage pro `correlationId`. Die Daten muessen strukturiert, filterbar und
-dauerhaft gespeichert werden.
+Audit-Snapshots muessen unveraenderlich und pro `correlationId` chronologisch
+abrufbar sein. Die Daten muessen strukturiert, filterbar und dauerhaft
+gespeichert werden.
 
 ## Decision
 

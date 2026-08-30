@@ -4,9 +4,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Zentrale Konfiguration des warehouse-service.
 
-    Alle Werte kommen ausschliesslich aus Umgebungsvariablen bzw. der
-    ".env"-Datei - keine hartcodierten Werte im Code (Vorgabe 5.2 der
-    Aufgabenstellung). Die eigentlichen Lager-/Bestandsdaten (Seed-Daten,
+    Alle Werte kommen aus Umgebungsvariablen bzw. der ".env"-Datei. Die
+    eigentlichen Lager-/Bestandsdaten (Seed-Daten,
     Produkt-IDs) liegen bewusst NICHT hier, sondern in database.py, da sie
     keine Umgebungs-/Deploy-spezifische Konfiguration sind.
     """

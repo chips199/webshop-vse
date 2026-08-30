@@ -4,11 +4,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Zentrale Konfiguration des audit-service.
 
-    Alle Werte kommen ausschliesslich aus Umgebungsvariablen bzw. der
-    ".env"-Datei - keine hartcodierten Werte im Code (Vorgabe 5.2 der
-    Aufgabenstellung). audit-service braucht bewusst wenige Einstellungen:
-    er kennt kein Business-Wissen ueber Shop/Zahlung und hat keine
-    anbieterspezifische Konfiguration.
+    Alle Werte kommen aus Umgebungsvariablen bzw. der ".env"-Datei.
+    audit-service braucht nur Infrastrukturkonfiguration, da er keine
+    fach- oder anbieterspezifischen Entscheidungen trifft.
     """
 
     # pydantic-settings liest Werte automatisch aus ENV-Variablen (Name in

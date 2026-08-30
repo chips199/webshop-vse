@@ -118,7 +118,7 @@ Billing-Service publiziert dazu `billing.payment.pending`
 Shop-Service reagiert nur, wenn `redirectUrl` vorhanden ist, und setzt die
 Order auf `PAYMENT_ACTION_REQUIRED`.
 
-**Ohne** PayPal-Credentials (Stub, Bonus 4.4) sendet der Adapter nach der
+**Ohne** PayPal-Credentials sendet der Stub-Adapter nach der
 konfigurierten Verzoegerung selbst einen HTTP-Webhook an den Billing-Service.
 Erst dieser Webhook wird in eines der bestehenden RabbitMQ-Events uebersetzt:
 

@@ -3,8 +3,8 @@
 Enthaelt alles, was mit dem Nachrichten-Broker zu tun hat: Verbindungsaufbau
 mit Retry, Event-Umschlag (build_message), Publizieren (publish_message) und
 den Consumer-Loop (consume_messages), der eingehende Commands an einen
-Handler weiterreicht. Fachlicher Code (main.py) importiert nur diese
-Funktionen und muss sich nie direkt mit pika beschaeftigen.
+Handler weiterreicht. Fachliche Module importieren nur diese Funktionen und
+muessen sich nicht direkt mit pika beschaeftigen.
 """
 
 import json

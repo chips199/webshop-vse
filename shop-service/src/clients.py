@@ -38,13 +38,9 @@ def fetch_audit_snapshots(correlation_id: str) -> list[dict]:
 def fetch_warehouse_stock(correlation_id: str | None = None) -> dict[str, dict]:
     """Holt den aktuellen Lagerbestand aller Produkte vom Warehouse-Service.
 
-    `correlation_id` sollte immer die correlationId der aufrufenden Anfrage
-    sein (siehe correlation_id_middleware), damit sich der Aufruf im
-    strukturierten Logging/Tracing der Bestellung zuordnen laesst - vorher
-    wurde hier faelschlich bei jedem Aufruf eine neue, zufaellige uuid4()
-    erzeugt, was die Trace-Kette zwischen shop-service und warehouse-service
-    zerriss. Der Default None/Fallback auf eine neue uuid4() bleibt nur als
-    Absicherung fuer Aufrufe ohne Request-Kontext bestehen.
+    `correlation_id` sollte die ID der aufrufenden Anfrage sein, damit der
+    Aufruf derselben Trace-Kette zugeordnet werden kann. Ohne Request-Kontext
+    wird ersatzweise eine neue ID erzeugt.
     """
     url = f"{settings.warehouse_service_url.rstrip('/')}/stock"
     request = UrlRequest(url, headers={"X-Correlation-Id": correlation_id or str(uuid4())})

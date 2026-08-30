@@ -1,11 +1,9 @@
-# Tag 12: Qualitaetssicherung und Abnahme
+# Qualitaetssicherung und Abnahme
 
 ## Ziel
 
-Tag 12 macht die bisherige Kernimplementierung abnahmefaehig. Im Fokus stehen
-reproduzierbare Tests, klare erwartete Endzustaende und eine kurze Anleitung,
-wie die RabbitMQ-Saga fuer den Onlineshop historischer Computerteile geprueft
-wird.
+Dieses Dokument beschreibt reproduzierbare Tests, erwartete Endzustaende und
+die Pruefung der RabbitMQ-Saga fuer den Onlineshop historischer Computerteile.
 
 ## Umfang
 
@@ -71,22 +69,19 @@ Die URLs koennen bei Bedarf ueberschrieben werden:
 SHOP_API=http://localhost:8000 AUDIT_API=http://localhost:8004 bash scripts/smoke-test.sh
 ```
 
-## Automatisierte Integrationstests (Bestellprozess)
+## Automatisierte Integrationstests
 
-Das Skript `scripts/integration-test.sh` deckt genau die in Abschnitt
-"Abnahmeszenarien" oben genannten Faelle end-to-end ab (Aufgabenblatt 5.2:
-"Integrationstests fuer den Bestellprozess: Happy Path und mindestens zwei
-Fehlerszenarien"):
+Das Skript `scripts/integration-test.sh` deckt die in Abschnitt
+"Abnahmeszenarien" genannten Faelle end-to-end ab:
 
 - Happy Path (`happy_path`) bis `COMPLETED`.
-- Zahlung abgelehnt (`payment_failed`) bis `PAYMENT_FAILED`, inkl. Nachweis
-  der Saga-Kompensation (Warehouse-Reservierung wird storniert).
-- Lager nicht ausreichend (`out_of_stock`) bis `OUT_OF_STOCK`, inkl.
-  Nachweis, dass **kein** weiterer Aufruf (Zahlung/Rechnung) erfolgt.
+- Zahlung abgelehnt (`payment_failed`) bis `PAYMENT_FAILED`, inklusive
+  Saga-Kompensation durch Stornierung der Warehouse-Reservierung.
+- Lager nicht ausreichend (`out_of_stock`) bis `OUT_OF_STOCK`, inklusive
+  Nachweis, dass kein weiterer Aufruf fuer Zahlung oder Rechnung erfolgt.
 
-Jedes Szenario prueft zusaetzlich per Admin-Audit-Endpunkt, dass die
-erwartete Event-Kette tatsaechlich als Audit-Snapshot vorliegt, nicht nur
-den Endstatus der Bestellung.
+Jedes Szenario prueft ueber den Admin-Audit-Endpunkt, dass die erwartete
+Event-Kette als Audit-Snapshot vorliegt, nicht nur den Endstatus der Bestellung.
 
 Aufruf:
 
@@ -100,4 +95,4 @@ bash scripts/integration-test.sh
 - Die Retro-Weboberflaeche kann mindestens eine Bestellung ausloesen.
 - Fuer jedes Fehlerszenario ist im Audit sichtbar, welches Event die
   Kompensation oder den Endstatus verursacht hat.
-- OpenAPI- und Event-Kontrakte passen zu den implementierten Szenarien.
+- OpenAPI- und Event-Kontrakte passen zu den beschriebenen Szenarien.

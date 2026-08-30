@@ -7,7 +7,7 @@ es einen zentralen Orchestrator gibt (jeder Service kennt nur seinen eigenen
 naechsten Schritt). Enthaelt ausserdem den Produktkatalog-/Bestand-Proxy, das
 Admin-Dashboard-Backend (Login, Bestelluebersicht, Produktverwaltung,
 Echtzeit-Updates per SSE) und den Circuit Breaker fuer den
-Invoice-Service-Aufruf (Bonusaufgabe 4.1).
+Invoice-Service-Aufruf.
 
 Diese Datei ist reine Zusammensetzung: erzeugt die FastAPI-App, verdrahtet
 Middleware, Fehler-Handler, statische Dateien und den RabbitMQ-Consumer-
@@ -116,7 +116,7 @@ app.add_middleware(
 @app.middleware("http")
 async def correlation_id_middleware(request: Request, call_next):
     """Liest X-Correlation-Id aus eingehenden Requests oder erzeugt eine neue,
-    haengt sie an die Response an (Aufgabenblatt 3.3/9.3)."""
+    und haengt sie an die Response an."""
     correlation_id = request.headers.get("X-Correlation-Id") or str(uuid4())
     request.state.correlation_id = correlation_id
     response: Response = await call_next(request)

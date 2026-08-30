@@ -48,7 +48,7 @@ async def get_payment_status(transactionId: str) -> PaymentStatusResponse:
 
 @router.post("/webhooks/payment-stub", response_model=AsyncPaymentWebhookResponse)
 async def receive_async_payment_webhook(request: AsyncPaymentWebhookRequest) -> AsyncPaymentWebhookResponse:
-    """Empfaengt den asynchronen Webhook-Callback des PayPal-Stubs (Bonus 4.4).
+    """Empfaengt den asynchronen Webhook-Callback des PayPal-Stubs.
 
     Wird ausschliesslich intern vom PayPalAdapter selbst aufgerufen (siehe
     _schedule_webhook()/_send_webhook() in payment/adapters.py), simuliert

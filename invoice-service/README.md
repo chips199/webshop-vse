@@ -44,10 +44,9 @@ Health check: `GET http://localhost:8003/health`. Interactive API docs:
 - Publishes `invoice.failed`
 
 invoice-service makes exactly **one** attempt per `invoice.create.requested`
-message; it no longer retries internally and no longer publishes
-`invoice.retry.scheduled` itself. Retry orchestration (how many attempts,
-backoff, when to give up) now lives in shop-service's saga, since only
-shop-service knows the state of the invoice circuit breaker (see
+message and reports failures through `invoice.failed`. Retry orchestration
+(how many attempts, backoff, and when to give up) belongs to shop-service's
+saga, since only shop-service knows the state of the invoice circuit breaker (see
 `shop-service/README.md`). On failure, invoice-service reports back via
 `invoice.failed` (including the `attempt` number and the payment fields
 shop-service needs to build a follow-up request), and shop-service decides

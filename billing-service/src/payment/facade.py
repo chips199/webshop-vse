@@ -1,7 +1,7 @@
 """Payment-Fassade.
 
 Einziger erlaubter Zugriffspunkt fuer Billing-Service-Code auf einen
-Zahlungsanbieter. Kapselt gemaess Aufgabenstellung (Abschnitt 3.1 / 9.2):
+Zahlungsanbieter. Kapselt:
 
   - Logging jeder Operation (strukturiert, inkl. correlationId)
   - einheitliche Fehlerbehandlung (Adapter-Exceptions verlassen die
@@ -39,7 +39,7 @@ class PaymentFacadeError(Exception):
 class PaymentFacade:
     """Kapselt genau einen PaymentAdapter und macht ihn sicher benutzbar.
 
-    Aufrufer (billing-service main.py) sprechen ausschliesslich mit dieser
+    Aufrufer im Billing-Service sprechen ausschliesslich mit dieser
     Klasse, nie direkt mit StripeAdapter/PayPalAdapter - siehe Modul-
     Docstring oben fuer die drei Garantien (Logging, Fehlerbehandlung,
     Retry).
@@ -85,7 +85,7 @@ class PaymentFacade:
         # Charges werden bewusst NICHT automatisch wiederholt: ein Retry
         # nach einem technischen Fehler (z.B. Timeout) koennte bei einem
         # echten Anbieter zu einer Doppelbuchung fuehren, da wir hier
-        # keine Idempotency-Keys garantieren (siehe Bonusaufgabe 4.2).
+        # keine anbieterweiten Idempotency-Keys garantieren.
         return self._execute(
             operation="charge",
             correlation_id=correlation_id,
