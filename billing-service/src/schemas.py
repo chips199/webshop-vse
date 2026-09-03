@@ -1,22 +1,17 @@
-"""Pydantic-Schemas (Request-/Response-Modelle) des billing-service.
-
-Reine Datenklassen ohne Verhalten - Validierung/Serialisierung fuer die
-HTTP-Schicht (routes.py). Enthaelt bewusst keine Business-Logik; die liegt
-in service.py.
-"""
+"""API-Datenmodelle des Billing-Service."""
 
 from pydantic import BaseModel
 
 
 class HealthResponse(BaseModel):
-    """Antwort von GET /health - fuer Docker-Healthchecks/Monitoring."""
+    """Antwort des Health-Endpunkts."""
 
     status: str = "ok"
     service: str
 
 
 class PaymentStatusResponse(BaseModel):
-    """Antwort von GET /payments/{transactionId}/status."""
+    """Status einer Zahlung."""
 
     transactionId: str
     provider: str
@@ -24,12 +19,7 @@ class PaymentStatusResponse(BaseModel):
 
 
 class AsyncPaymentWebhookRequest(BaseModel):
-    """Body des internen PayPal-Stub-Webhooks (POST /webhooks/payment-stub).
-
-    Wird ausschliesslich vom PayPalAdapter selbst geschickt (siehe
-    _send_webhook() in payment/adapters.py), simuliert damit den
-    asynchronen Webhook-Callback eines echten Zahlungsanbieters.
-    """
+    """Payload des internen PayPal-Stub-Webhooks."""
 
     orderId: str
     transactionId: str
@@ -45,7 +35,7 @@ class AsyncPaymentWebhookRequest(BaseModel):
 
 
 class AsyncPaymentWebhookResponse(BaseModel):
-    """Antwort von POST /webhooks/payment-stub (nur Bestaetigung des Empfangs)."""
+    """Bestaetigung des Webhook-Empfangs."""
 
     accepted: bool = True
     eventType: str

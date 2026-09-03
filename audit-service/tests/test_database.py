@@ -5,16 +5,13 @@ from src.database import _status_code_for, insert_snapshot_from_message
 
 
 class StatusCodeForTest(unittest.TestCase):
-    """Deckt die reine Ableitungslogik von _status_code_for() ab - inkl. der
-    bewussten Prioritaet ".failed" vor ".cancel."/".refund." (siehe
-    test_failed_takes_precedence_over_refund_pattern)."""
+    """Tests fuer Statusableitung und Prioritaet ueberlappender Muster."""
 
     def test_failed_event_maps_to_failure(self) -> None:
         self.assertEqual(_status_code_for("billing.payment.failed"), "FAILURE")
 
     def test_failed_takes_precedence_over_refund_pattern(self) -> None:
-        # "billing.refund.failed" enthaelt sowohl ".failed" als auch ".refund." -
-        # die Failure-Pruefung steht in _status_code_for() bewusst zuerst.
+        # FAILURE hat Vorrang vor dem Refund-Muster.
         self.assertEqual(_status_code_for("billing.refund.failed"), "FAILURE")
 
     def test_retry_event_maps_to_retry(self) -> None:
@@ -34,10 +31,7 @@ class StatusCodeForTest(unittest.TestCase):
 
 
 class InsertSnapshotFromMessageTest(unittest.TestCase):
-    """insert_snapshot_from_message() gegen eine gemockte psycopg-Verbindung -
-    prueft, dass die INSERT-Query mit den richtig abgeleiteten Werten
-    (eventType, statusCode, actor) aufgerufen wird, ohne eine echte DB zu
-    brauchen."""
+    """Prueft SQL-Parameter mit einer gemockten Datenbankverbindung."""
 
     def _make_message(self, message_type: str = "warehouse.reservation.succeeded") -> dict:
         return {

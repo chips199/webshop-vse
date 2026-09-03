@@ -1,4 +1,4 @@
-"""Oeffentliche API des Circuit Breakers fuer Invoice-Service-Aufrufe."""
+"""Oeffentliche Schnittstelle des Circuit-Breaker-Pakets."""
 
 from .circuit_breaker import (
     CircuitBreaker,

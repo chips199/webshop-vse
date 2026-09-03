@@ -1,12 +1,4 @@
-"""Service-Schicht des shop-service fuer die synchronen HTTP-Endpunkte.
-
-Enthaelt die Business-Logik, die von den Router-Funktionen in routes.py
-gebraucht wird, aber nicht selbst HTTP-spezifisch ist: Admin-Session-
-Handling (Token-Hashing, require_admin-Dependency), Idempotency-Key-
-Verarbeitung und Serialisierung von DB-Datensaetzen in
-die jeweiligen Response-Schemas. Die Saga-/Consumer-seitige Business-Logik
-(RabbitMQ-Events) liegt getrennt in saga.py.
-"""
+"""Hilfsfunktionen der HTTP-Schicht des Shop-Service."""
 
 import hashlib
 import json
@@ -20,16 +12,12 @@ ADMIN_SESSION_COOKIE = "admin_session"
 
 
 def _token_hash(token: str) -> str:
-    """Hasht ein Admin-Session-Token fuer den Datenbankvergleich - siehe
-    create_admin_session()/get_admin_session() in database.py: gespeichert
-    wird nie das Klartext-Token."""
+    """Hasht ein Admin-Session-Token."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 async def require_admin(request: Request) -> str:
-    """FastAPI-Dependency: prueft das Admin-Session-Cookie und liefert den
-    eingeloggten Benutzernamen, sonst 401. In allen /admin/*-Endpunkten per
-    `Depends(require_admin)` eingebunden."""
+    """Prueft das Admin-Session-Cookie und liefert den Benutzernamen."""
     token = request.cookies.get(ADMIN_SESSION_COOKIE)
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin login required")
@@ -40,11 +28,7 @@ async def require_admin(request: Request) -> str:
 
 
 def _idempotency_key_from_request(request: Request) -> str | None:
-    """Liest und validiert den optionalen Idempotency-Key-Header.
-
-    Gibt None zurueck, falls der Header fehlt, und 400 bei leerem oder zu
-    langem Wert.
-    """
+    """Liest und validiert den optionalen Idempotency-Key."""
     value = request.headers.get("Idempotency-Key")
     if value is None:
         return None
@@ -57,16 +41,13 @@ def _idempotency_key_from_request(request: Request) -> str | None:
 
 
 def _request_hash(order: CreateOrderRequest) -> str:
-    """Bildet einen stabilen Hash ueber den Request-Body (sortierte Keys,
-    kompakte Trennzeichen) - dient dazu, bei Wiederverwendung eines
-    Idempotency-Keys zu erkennen, ob es sich um denselben oder einen
-    fachlich abweichenden Request handelt (siehe create_order() in routes.py)."""
+    """Bildet einen stabilen Hash des Request-Bodys."""
     canonical = json.dumps(order.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _order_response(order: dict) -> OrderResponse:
-    """Serialisiert einen DB-Bestelldatensatz zur oeffentlichen OrderResponse."""
+    """Serialisiert eine Bestellung fuer die oeffentliche API."""
     return OrderResponse(
         orderId=str(order["orderId"]),
         correlationId=str(order["correlationId"]),
@@ -81,11 +62,7 @@ def _order_response(order: dict) -> OrderResponse:
 
 
 def _initial_order_response(order: dict) -> OrderResponse:
-    """Wie _order_response(), aber fuer den Idempotenz-Kurzschluss in
-    create_order() (routes.py): dort liegen nur wenige Felder vor (der
-    DB-Datensatz aus get_order_by_idempotency_key() enthaelt nicht alle
-    OrderResponse-Felder), daher der bewusst simplere Status "PENDING" statt
-    des tatsaechlichen aktuellen Status."""
+    """Serialisiert die reduzierte Antwort eines Idempotenz-Treffers."""
     return OrderResponse(
         orderId=str(order["orderId"]),
         correlationId=str(order["correlationId"]),
@@ -96,10 +73,7 @@ def _initial_order_response(order: dict) -> OrderResponse:
 
 
 def _serialize_product(product: dict, stock: dict | None = None) -> dict:
-    """Kombiniert Produkt-Stammdaten (aus shop-service-DB) mit Bestandsdaten
-    (aus warehouse-service) zu einem ProductResponse-Dict. Ohne Bestandsdaten
-    (warehouse-service nicht erreichbar) bleibt stockStatus "UNKNOWN" statt
-    faelschlich "verfuegbar" oder "nicht verfuegbar" zu behaupten."""
+    """Kombiniert Produkt- und Bestandsdaten fuer die API."""
     serialized = {
         **product,
         "id": str(product["id"]),
@@ -119,8 +93,7 @@ def _serialize_product(product: dict, stock: dict | None = None) -> dict:
 
 
 def _serialize_order(order: dict) -> dict:
-    """Wandelt DB-spezifische Typen (UUID-Objekte) der Admin-Bestellsicht in
-    Strings um, wie sie AdminOrderResponse erwartet."""
+    """Serialisiert eine Bestellung fuer das Admin-Dashboard."""
     return {
         **order,
         "orderId": str(order["orderId"]),

@@ -43,7 +43,7 @@ class PaymentFacadeTest(unittest.TestCase):
         self.assertEqual(result.status, PaymentStatus.SUCCEEDED)
 
     def test_paypal_charge_without_credentials_returns_pending_and_schedules_webhook(self) -> None:
-        # Im Stub-Modus kommt das Ergebnis nach PENDING per Timer-Webhook.
+        # Der Stub meldet das Ergebnis nach PENDING per Timer-Webhook.
         with patch.object(PayPalAdapter, "_schedule_webhook") as schedule_webhook:
             result = get_payment_facade("paypal").charge("order-2", Decimal("49.90"), "EUR")
         self.assertEqual(result.provider, "paypal")
@@ -157,7 +157,7 @@ class PaymentFacadeTest(unittest.TestCase):
         self.assertEqual(payload["status"], "FAILED")
         self.assertEqual(payload["reasonCode"], "ASYNC_DECLINED")
 
-    # Technische Statusfehler werden wiederholt; fachliche Fehlschlaege nicht.
+    # Nur technische Statusfehler werden wiederholt.
 
     def test_stripe_get_status_retries_on_technical_error_then_raises(self) -> None:
         settings.stripe_secret_key = "sk_test_dummy"
@@ -205,7 +205,7 @@ class PaymentFacadeTest(unittest.TestCase):
         self.assertEqual(result.status, PaymentStatus.FAILED)
         capture_order.assert_called_once()
 
-    # Stripe-Refunds benoetigen die PaymentIntent-ID statt der Session-ID.
+    # Stripe-Refunds benoetigen die PaymentIntent-ID.
 
     def test_stripe_get_status_switches_to_payment_intent_id_on_success(self) -> None:
         settings.stripe_secret_key = "sk_test_dummy"
@@ -223,10 +223,7 @@ class PaymentFacadeTest(unittest.TestCase):
         self.assertEqual(result.transaction_id, "pi_test_456")
 
     def test_stripe_get_status_falls_back_to_session_id_without_payment_intent(self) -> None:
-        # Fehlt "payment_intent" in der Stripe-Antwort (sollte bei einer
-        # bezahlten Session im "payment"-Modus nicht vorkommen, aber
-        # verteidigt gegen unerwartete API-Antworten), bleibt get_status()
-        # bei der urspruenglichen Session-Id statt None zurueckzugeben.
+        # Ohne payment_intent bleibt die Session-ID erhalten.
         settings.stripe_secret_key = "sk_test_dummy"
         with patch.object(
             StripeAdapter,
@@ -236,14 +233,7 @@ class PaymentFacadeTest(unittest.TestCase):
             result = get_payment_facade("stripe").get_status("cs_test_123")
         self.assertEqual(result.transaction_id, "cs_test_123")
 
-    # -- Kundendaten aus der Sandbox uebernehmen --
-    #
-    # Mit Sandbox-Credentials liefern Stripe/PayPal beim erfolgreichen
-    # get_status() echte Kaeufer-/Adressdaten mit, wenn der Kaeufer sie auf
-    # der Anbieter-Seite eingegeben hat. Die folgenden Tests verifizieren,
-    # dass PaymentResult.customer/.shipping_address dann befuellt sind, und
-    # dass reine Platzhalter-Antworten (keine echten Daten vom Anbieter)
-    # NICHT durchgereicht werden.
+    # Kundendaten aus den Sandbox-Antworten.
 
     def test_stripe_get_status_returns_real_customer_and_shipping(self) -> None:
         settings.stripe_secret_key = "sk_test_dummy"

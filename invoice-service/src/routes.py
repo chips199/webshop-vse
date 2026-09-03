@@ -1,9 +1,4 @@
-"""HTTP-Router (Router-Schicht) des invoice-service.
-
-Zwei GET-Endpunkte fuer Metadaten (/invoices/{invoiceId}) und PDF-Download
-(/invoices/{invoiceId}/pdf). Reine Weiterleitung an die Repository-Schicht
-(database.py) plus Serialisierung (_serialize_invoice() aus service.py).
-"""
+"""HTTP-Endpunkte des Invoice-Service."""
 
 from pathlib import Path
 
@@ -25,7 +20,7 @@ async def health() -> HealthResponse:
 
 @router.get("/invoices/{invoiceId}", response_model=InvoiceResponse)
 async def get_invoice(invoiceId: str) -> InvoiceResponse:
-    """Liefert Metadaten (Status, Versuche, Fehler, Download-URL) zu einer Rechnung."""
+    """Liefert die Metadaten einer Rechnung."""
     invoice = get_invoice_record(invoiceId)
     if not invoice:
         raise HTTPException(status_code=404, detail=f"Invoice {invoiceId} not found")
@@ -34,12 +29,7 @@ async def get_invoice(invoiceId: str) -> InvoiceResponse:
 
 @router.get("/invoices/{invoiceId}/pdf")
 async def download_invoice_pdf(invoiceId: str) -> FileResponse:
-    """Liefert die erzeugte PDF-Datei zum Download aus.
-
-    409 statt 404, wenn die Rechnung existiert, aber (noch) nicht CREATED
-    ist - unterscheidet "gibt's nicht" von "gibt's, ist aber noch nicht
-    fertig/fehlgeschlagen" fuer den aufrufenden Client.
-    """
+    """Liefert die erzeugte PDF-Datei."""
     invoice = get_invoice_record(invoiceId)
     if not invoice:
         raise HTTPException(status_code=404, detail=f"Invoice {invoiceId} not found")
@@ -47,8 +37,7 @@ async def download_invoice_pdf(invoiceId: str) -> FileResponse:
         raise HTTPException(status_code=409, detail=f"Invoice {invoiceId} is not ready for download")
     pdf_path = Path(invoice["pdfPath"])
     if not pdf_path.exists() or not pdf_path.is_file():
-        # DB sagt "CREATED", aber die Datei fehlt (z.B. Volume verloren) -
-        # 404 statt 500, weil aus Client-Sicht schlicht keine PDF verfuegbar ist.
+        # Fehlende Datei trotz CREATED-Status.
         raise HTTPException(status_code=404, detail=f"Invoice PDF for {invoiceId} not found")
     return FileResponse(
         path=pdf_path,

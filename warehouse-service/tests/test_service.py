@@ -130,9 +130,7 @@ class HandleWarehouseReserveMessageTest(unittest.TestCase):
         self.assertEqual(event["payload"]["reasonCode"], "OUT_OF_STOCK")
 
     def test_reserve_forced_out_of_stock_scenario_cancels_and_fails(self) -> None:
-        # Testszenario: reserve_stock() meldet Erfolg, das Szenario erzwingt
-        # trotzdem eine Stornierung + Fehlschlag-Event (siehe Docstring in
-        # service.py).
+        # Das Testszenario storniert eine zuvor erfolgreiche Reservierung.
         message = _message("warehouse.reserve.requested", self._reserve_payload(scenario="out_of_stock"))
         with patch("src.service.reserve_stock", return_value=(True, None)), \
                 patch("src.service.cancel_reservation") as cancel_reservation, \

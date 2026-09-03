@@ -1,16 +1,4 @@
-"""Payment-Fassade.
-
-Einziger erlaubter Zugriffspunkt fuer Billing-Service-Code auf einen
-Zahlungsanbieter. Kapselt:
-
-  - Logging jeder Operation (strukturiert, inkl. correlationId)
-  - einheitliche Fehlerbehandlung (Adapter-Exceptions verlassen die
-    Fassade nie unveraendert)
-  - Retry mit Backoff bei transienten technischen Fehlern
-
-Gibt ausschliesslich Domaenentypen aus payment.models zurueck
-(PaymentResult) - niemals anbieterspezifische Objekte/Dicts.
-"""
+"""Einheitlicher Zugriff auf Zahlungsanbieter mit Logging und Retry."""
 
 from __future__ import annotations
 
@@ -28,22 +16,11 @@ logger = logging.getLogger(__name__)
 
 
 class PaymentFacadeError(Exception):
-    """Einzige Exception, die die Fassade nach aussen durchlaesst.
-
-    Kapselt den urspruenglichen (anbieterspezifischen) Fehler, damit
-    Aufrufer der Fassade niemals gegen Stripe-/PayPal-spezifische
-    Exception-Typen programmieren muessen.
-    """
+    """Kapselt Fehler eines Zahlungsanbieters."""
 
 
 class PaymentFacade:
-    """Kapselt genau einen PaymentAdapter und macht ihn sicher benutzbar.
-
-    Aufrufer im Billing-Service sprechen ausschliesslich mit dieser
-    Klasse, nie direkt mit StripeAdapter/PayPalAdapter - siehe Modul-
-    Docstring oben fuer die drei Garantien (Logging, Fehlerbehandlung,
-    Retry).
-    """
+    """Kapselt einen PaymentAdapter."""
 
     def __init__(
             self,
@@ -51,9 +28,6 @@ class PaymentFacade:
             max_attempts: int | None = None,
             retry_backoff_seconds: float | None = None,
     ) -> None:
-        # max_attempts/retry_backoff_seconds sind ueberschreibbar (v.a. fuer
-        # Tests, die keine echten Sleeps wollen); im Normalbetrieb kommen
-        # sie aus settings.payment_retry_* (siehe config.py).
         self._adapter = adapter
         self._max_attempts = max_attempts or settings.payment_retry_max_attempts
         self._retry_backoff_seconds = (
@@ -64,7 +38,7 @@ class PaymentFacade:
 
     @property
     def provider_name(self) -> str:
-        """Name des aktiven Anbieters (z.B. "stripe"), fuers Logging/Debugging."""
+        """Name des aktiven Anbieters."""
         return self._adapter.provider_name
 
     def charge(
@@ -75,17 +49,9 @@ class PaymentFacade:
             payment_method: str | None = None,
             payment_metadata: dict[str, Any] | None = None,
     ) -> PaymentResult:
-        """Stoesst eine Zahlung beim aktiven Anbieter an (Stripe/PayPal).
-
-        Kann SUCCEEDED (Stub ohne Credentials), PENDING (echte Sandbox:
-        Redirect noetig, oder PayPal-Stub: Webhook kommt spaeter) oder ueber
-        eine geworfene PaymentFacadeError fehlschlagen.
-        """
+        """Startet eine Zahlung beim aktiven Anbieter."""
         correlation_id = (payment_metadata or {}).get("correlationId")
-        # Charges werden bewusst NICHT automatisch wiederholt: ein Retry
-        # nach einem technischen Fehler (z.B. Timeout) koennte bei einem
-        # echten Anbieter zu einer Doppelbuchung fuehren, da wir hier
-        # keine anbieterweiten Idempotency-Keys garantieren.
+        # Charge-Aufrufe werden wegen moeglicher Doppelbuchungen nicht wiederholt.
         return self._execute(
             operation="charge",
             correlation_id=correlation_id,
@@ -102,13 +68,7 @@ class PaymentFacade:
             amount: Decimal,
             correlation_id: str | None = None,
     ) -> PaymentResult:
-        """Erstattet eine bereits erfolgreich abgeschlossene Zahlung.
-
-        Wird z.B. als Saga-Kompensation aufgerufen, wenn die Zahlung schon
-        durch war, aber ein spaeterer Schritt (Warehouse-Commit) scheitert.
-        Retryable, da ein wiederholter Refund-Aufruf beim Anbieter in der
-        Regel keine zusaetzliche Rueckerstattung ausloest.
-        """
+        """Erstattet eine abgeschlossene Zahlung."""
         return self._execute(
             operation="refund",
             correlation_id=correlation_id,
@@ -122,16 +82,7 @@ class PaymentFacade:
             transaction_id: str,
             correlation_id: str | None = None,
     ) -> PaymentResult:
-        # Reiner Lesezugriff -> unkritisch, daher retryable.
-        #
-        # Damit dieser Retry tatsaechlich greift, reichen StripeAdapter und
-        # PayPalAdapter technische Fehler (RuntimeError bei Netzwerk-/HTTP-
-        # Fehlern gegen die Sandbox-API) aus get_status() unveraendert bis
-        # hierher durch, statt sie selbst in ein FAILED-PaymentResult
-        # umzuwandeln (siehe adapters.py). Nur ein fachliches "nicht
-        # abgeschlossen" (Session/Order erfolgreich abgefragt, aber nicht
-        # bezahlt/completed) liefert direkt FAILED zurueck - das ist kein
-        # technischer Fehler und wird bewusst nicht wiederholt.
+        # Technische Fehler beim Statusabruf duerfen wiederholt werden.
         return self._execute(
             operation="get_status",
             correlation_id=correlation_id,
@@ -149,16 +100,7 @@ class PaymentFacade:
             call: Callable[[], PaymentResult],
             retryable: bool,
     ) -> PaymentResult:
-        """Gemeinsame Ausfuehrungs-Logik fuer charge()/refund()/get_status().
-
-        Ruft `call()` auf, loggt jeden Versuch strukturiert und wiederholt
-        bei einer Exception mit linear steigendem Backoff
-        (retry_backoff_seconds * Versuchsnummer), sofern `retryable=True`
-        ist und noch Versuche uebrig sind. Jede Adapter-Exception wird am
-        Ende - egal ob nach Retries oder sofort bei retryable=False - in
-        eine PaymentFacadeError uebersetzt; Aufrufer der Fassade sehen also
-        nie eine Stripe-/PayPal-spezifische Exception.
-        """
+        """Fuehrt eine Adapteroperation mit Logging und linearem Backoff aus."""
         max_attempts = self._max_attempts if retryable else 1
         attempt = 0
         last_exception: Exception | None = None
@@ -167,7 +109,7 @@ class PaymentFacade:
             attempt += 1
             try:
                 result = call()
-            except Exception as exc:  # Adapter-Exceptions nie unveraendert weiterreichen
+            except Exception as exc:  # Anbieterfehler vereinheitlichen
                 last_exception = exc
                 will_retry = attempt < max_attempts
                 logger.warning(
@@ -223,19 +165,12 @@ class PaymentFacade:
                 )
                 return result
 
-        # Nur zur Absicherung fuer statische Analyse, praktisch unerreichbar.
+        # Unerreichbar bei max_attempts >= 1.
         raise PaymentFacadeError(str(last_exception))
 
 
 def get_payment_facade(provider: str | None = None) -> PaymentFacade:
-    """Erstellt die Fassade fuer den aktiven Zahlungsanbieter.
-
-    Der Anbieter wird ausschliesslich ueber Konfiguration bestimmt
-    (settings.payment_provider, gesetzt per ENV-Variable / .env-Datei) -
-    niemals im Code fest verdrahtet. Das optionale `provider`-Argument
-    dient nur Tests und dem Fall, dass eine einzelne Order explizit
-    einen (weiterhin konfigurierten) Provider referenziert.
-    """
+    """Erstellt die Fassade fuer den konfigurierten Anbieter."""
     selected = (provider or settings.payment_provider).lower()
     try:
         adapter_class = PaymentAdapter.registry[selected]

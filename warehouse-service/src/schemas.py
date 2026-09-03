@@ -1,17 +1,17 @@
-"""Pydantic-Schemas (Request-/Response-Modelle) des warehouse-service."""
+"""API-Datenmodelle des Warehouse-Service."""
 
 from pydantic import BaseModel, Field
 
 
 class HealthResponse(BaseModel):
-    """Antwort des /health-Endpunkts (fuer Docker-Healthchecks/Monitoring)."""
+    """Antwort des Health-Endpunkts."""
 
     status: str = "ok"
     service: str
 
 
 class StockResponse(BaseModel):
-    """Bestandsdatensatz eines Produkts, wie er nach aussen (REST) sichtbar ist."""
+    """Bestandsdaten eines Produkts."""
 
     productId: str
     quantityOnHand: int
@@ -21,13 +21,13 @@ class StockResponse(BaseModel):
 
 
 class StockUpdateRequest(BaseModel):
-    """Body fuer PATCH /stock/{productId} (Admin-Bestandspflege)."""
+    """Aenderung eines Lagerbestands."""
 
     quantityOnHand: int = Field(ge=0)
     location: str | None = None
 
 
 class StockCreateRequest(StockUpdateRequest):
-    """Body fuer POST /stock (neues Produkt im Lager anlegen)."""
+    """Neuer Lagerbestand."""
 
     productId: str

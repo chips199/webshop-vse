@@ -1,14 +1,4 @@
-"""Saga-Service-Schicht des shop-service: RabbitMQ-Event-Handling (Choreografie).
-
-Enthaelt die zentrale Verteil-/Entscheidungslogik der Shop-Saga
-(handle_saga_message()) sowie alle Hilfsfunktionen, die dabei gebraucht
-werden: Echtzeit-Benachrichtigung des Admin-Dashboards, den
-Circuit-Breaker-gated Rechnungs-Aufruf samt Retry-Orchestrierung und die
-Vollstaendigkeitspruefung fuer order.completed.
-Die zwei HTTP-Endpunkte, die ebenfalls einen Saga-Schritt anstossen
-(create_order(), confirm_order_payment() in routes.py), rufen
-notify_admin_dashboard() direkt von hier auf.
-"""
+"""Ereignisverarbeitung der Shop-Saga."""
 
 import logging
 import threading
@@ -37,28 +27,12 @@ invoice_circuit_breaker = CircuitBreaker(
 
 
 def handle_saga_message(message: dict) -> None:
-    """Zentraler Verteiler fuer alle eingehenden Saga-Events (Choreografie).
-
-    shop-service konsumiert praktisch jedes Event, das die anderen Services
-    publizieren, und entscheidet hier - abhaengig vom message_type - was als
-    naechstes zu tun ist (naechstes Command publizieren, Bestellstatus
-    aktualisieren, oder beides). Jeder Zweig endet mit `return`, sobald er
-    fertig ist. Reihenfolge der Zweige entspricht grob dem Happy-Path-Ablauf
-    der Saga; Fehler-/Kompensationszweige (z.B. billing.payment.failed,
-    warehouse.commit.failed) stossen jeweils die passende
-    Rueckabwicklung an.
-    """
+    """Verarbeitet eingehende Saga-Ereignisse und startet Folgeschritte."""
     message_type = message["type"]
     payload = message.get("payload", {})
     correlation_id = message["correlationId"]
 
-    # Ein generischer Hook ersetzt eigene Dashboard-Aufrufe in jedem der
-    # vielen if-Zweige unten - fast jede Saga-Nachricht traegt eine orderId
-    # im Payload, und dem Dashboard reicht "fuer diese Bestellung hat sich
-    # etwas getan, bitte neu laden" (siehe realtime.py). Laeuft im
-    # Consumer-Thread und darf daher nicht blockieren - notify_admin_dashboard
-    # faengt eigene Fehler ab, damit ein Problem beim Publizieren die
-    # eigentliche Saga-Verarbeitung niemals stoeren kann.
+    # Einheitliches Aenderungssignal fuer das Admin-Dashboard.
     notify_admin_dashboard(payload.get("orderId"), correlation_id, message_type)
 
     if message_type == "warehouse.reservation.succeeded":
@@ -147,22 +121,15 @@ def handle_saga_message(message: dict) -> None:
 
     if message_type == "invoice.failed":
         order_id = payload["orderId"]
-        # attempt kommt von invoice-service durchgereicht (siehe dortiges
-        # handle_invoice_message); Default 1 sichert Nachrichten ohne Feld ab.
+        # Nachrichten ohne Versuchsnummer gelten als erster Versuch.
         attempt = payload.get("attempt", 1)
         transition = invoice_circuit_breaker.record_failure(payload.get("reasonCode", "INVOICE_FAILED"))
         publish_invoice_circuit_transition(correlation_id, order_id, transition, message["messageId"])
 
         if attempt < settings.invoice_max_retries:
-            # Noch Versuche uebrig: Bestellung bleibt (sichtbar) im Retry-Zustand,
-            # und die Shop-Saga plant selbst den naechsten Versuch.
             update_order_status(order_id, "INVOICE_RETRY_PENDING")
             schedule_invoice_retry(order_id, correlation_id, payload, message, attempt)
         else:
-            # Alle Versuche verbraucht: endgueltiger, nicht mehr automatisch
-            # wiederholter Fehlerzustand - bewusst von INVOICE_RETRY_PENDING
-            # unterschieden, damit im Admin-Frontend erkennbar ist, dass hier
-            # kein weiterer Versuch mehr folgt.
             update_order_status(order_id, "INVOICE_FAILED")
             logger.error(
                 "Invoice creation failed permanently after exhausting retries",
@@ -219,33 +186,18 @@ def handle_saga_message(message: dict) -> None:
 
 
 def notify_admin_dashboard(order_id: str | None, correlation_id: str | None, reason: str) -> None:
-    """Benachrichtigt alle verbundenen Admin-Dashboards ueber eine Aenderung.
-
-    `reason` ist der ausloesende Nachrichtentyp (z.B. "billing.payment.
-    succeeded") bzw. "order.created"/"order.payment-confirmation" fuer die
-    beiden HTTP-Aufrufstellen in routes.py - nur zu Debugging-/Logging-Zwecken
-    im Frontend, keine fachliche Bedeutung fuer den Consumer der
-    SSE-Verbindung (siehe admin_orders_events() in routes.py / realtime.py):
-    das Dashboard reagiert einheitlich mit "betroffene Bestellung neu laden",
-    unabhaengig vom genauen Grund.
-    """
+    """Sendet ein Aenderungssignal an verbundene Admin-Dashboards."""
     if not order_id:
         return
     try:
         realtime.publish({"orderId": str(order_id), "correlationId": str(correlation_id), "reason": reason})
     except Exception:
-        # Darf die eigentliche Verarbeitung (Saga-Consumer oder HTTP-Request)
-        # niemals stoeren - das Live-Update ist ein Komfortfeature, kein
-        # fachlich kritischer Pfad.
+        # Fehler im Live-Update duerfen die Saga nicht abbrechen.
         logger.warning("Failed to publish admin dashboard realtime event", extra={"context": {"orderId": order_id}})
 
 
 def maybe_publish_order_completed(order_id: str, correlation_id: str, previous_message: dict) -> None:
-    """Prueft, ob alle drei Saga-Zweige (Zahlung/Rechnung/Lager) fertig sind,
-    und publiziert order.completed nur dann - siehe complete_order_if_ready()
-    in database.py fuer die eigentliche (atomare) Bedingung. Wird nach JEDEM
-    der drei moeglichen Abschluss-Events aufgerufen (invoice.created,
-    warehouse.commit.succeeded), da die Reihenfolge nicht feststeht."""
+    """Publiziert den Abschluss nach Zahlung, Rechnung und Lager-Commit."""
     if not complete_order_if_ready(order_id):
         return
     order_completed = build_message(
@@ -267,16 +219,7 @@ def request_invoice_with_circuit(
     previous_message: dict,
     attempt: int = 1,
 ) -> None:
-    """Fordert eine Rechnung an - Circuit-Breaker-gated, mit Versuchsnummer.
-
-    `attempt` ist 1 beim allerersten Versuch (ausgeloest durch
-    billing.payment.succeeded) und wird bei Wiederholungen von
-    schedule_invoice_retry() hochgezaehlt durchgereicht. invoice-service
-    bekommt den Wert im Payload mit, damit es ihn beim Melden eines
-    Fehlschlags unveraendert zurueckspiegeln kann (siehe invoice.failed-Zweig
-    oben) - so muss der Retry-Zaehler an keiner Stelle dauerhaft
-    gespeichert werden.
-    """
+    """Fordert eine Rechnung unter Kontrolle des Circuit Breakers an."""
     try:
         transition = invoice_circuit_breaker.before_call()
         publish_invoice_circuit_transition(correlation_id, order_id, transition, previous_message["messageId"])
@@ -318,21 +261,7 @@ def schedule_invoice_retry(
     previous_message: dict,
     attempt: int,
 ) -> None:
-    """Plant nach kurzem Backoff einen weiteren Rechnungs-Versuch.
-
-    Die Retry-Orchestrierung sitzt in der Shop-Saga, da nur shop-service den
-    Zustand des Circuit Breakers fuer Invoice-Aufrufe kennt und damit, ob ein
-    weiterer Versuch aktuell ueberhaupt sinnvoll ist. Der eigentliche
-    Retry-Aufruf laeuft in einem eigenen Timer-Thread ab (wie z.B. auch der
-    verzoegerte Webhook in billing-service), damit der Nachrichten-Consumer
-    hier nicht blockiert wird.
-
-    `payload` ist das Payload der invoice.failed-Nachricht und enthaelt
-    bereits transactionId/provider/amount/currency/scenario - alles, was
-    request_invoice_with_circuit() braucht (Kunden-/Lieferdaten werden dort
-    ohnehin frisch per get_order_record() nachgeladen statt hier
-    mitgeschleppt zu werden).
-    """
+    """Plant einen weiteren Rechnungsversuch mit linearem Backoff."""
     next_attempt = attempt + 1
     retry_event = build_message(
         "invoice.retry.scheduled",
@@ -371,11 +300,7 @@ def publish_invoice_circuit_transition(
     transition,
     previous_event_id: str,
 ) -> None:
-    """Meldet eine CircuitTransition (falls vorhanden) als eigenes Event, damit
-    Zustandswechsel des Invoice-Circuit-Breakers ueber die Audit-Snapshots
-    nachvollziehbar sind. `transition` ist None, wenn before_call()/
-    record_success()/record_failure() keinen Zustandswechsel ausgeloest
-    haben - dann wird bewusst nichts publiziert."""
+    """Publiziert einen Zustandswechsel des Invoice-Circuit-Breakers."""
     if transition is None:
         return
     event = build_message(

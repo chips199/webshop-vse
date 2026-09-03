@@ -1,11 +1,4 @@
-"""HTTP-Clients (Infrastruktur-Schicht) fuer die anderen Services.
-
-shop-service besitzt weder eigene Bestandsdaten (die liegen in
-warehouse-service) noch eigene Audit-Snapshots (die liegen in
-audit-service) - beides wird stattdessen synchron per HTTP nachgeladen.
-Bewusst mit der Python-Standardbibliothek (urllib) statt einer zusaetzlichen
-HTTP-Client-Abhaengigkeit, da hier nur wenige, einfache Aufrufe noetig sind.
-"""
+"""HTTP-Clients fuer Audit- und Warehouse-Service."""
 
 import json
 import logging
@@ -22,9 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def fetch_audit_snapshots(correlation_id: str) -> list[dict]:
-    """Holt die Audit-Timeline synchron per HTTP von audit-service (statt
-    direkt aus dessen Tabelle zu lesen, siehe get_audit_snapshots_for_order()
-    in database.py). 502, falls audit-service nicht erreichbar ist."""
+    """Liest die Audit-Timeline per HTTP."""
     url = f"{settings.audit_service_url.rstrip('/')}/audit/orders/{correlation_id}"
     request = UrlRequest(url, headers={"X-Correlation-Id": correlation_id})
     try:
@@ -36,12 +27,7 @@ def fetch_audit_snapshots(correlation_id: str) -> list[dict]:
 
 
 def fetch_warehouse_stock(correlation_id: str | None = None) -> dict[str, dict]:
-    """Holt den aktuellen Lagerbestand aller Produkte vom Warehouse-Service.
-
-    `correlation_id` sollte die ID der aufrufenden Anfrage sein, damit der
-    Aufruf derselben Trace-Kette zugeordnet werden kann. Ohne Request-Kontext
-    wird ersatzweise eine neue ID erzeugt.
-    """
+    """Liest den gesamten Lagerbestand per HTTP."""
     url = f"{settings.warehouse_service_url.rstrip('/')}/stock"
     request = UrlRequest(url, headers={"X-Correlation-Id": correlation_id or str(uuid4())})
     try:
@@ -54,10 +40,7 @@ def fetch_warehouse_stock(correlation_id: str | None = None) -> dict[str, dict]:
 
 
 def update_warehouse_stock(product_id: str, stock: dict, correlation_id: str | None = None) -> dict:
-    """Aktualisiert den Lagerbestand eines Produkts im Warehouse-Service.
-
-    Siehe fetch_warehouse_stock() zum Zweck von correlation_id.
-    """
+    """Aktualisiert einen Lagerbestand per HTTP."""
     url = f"{settings.warehouse_service_url.rstrip('/')}/stock/{product_id}"
     request = UrlRequest(
         url,
@@ -76,10 +59,7 @@ def update_warehouse_stock(product_id: str, stock: dict, correlation_id: str | N
 
 
 def create_warehouse_stock(stock: dict, correlation_id: str | None = None) -> dict:
-    """Legt einen initialen Lagerbestand fuer ein neu angelegtes Produkt an.
-
-    Siehe fetch_warehouse_stock() zum Zweck von correlation_id.
-    """
+    """Legt einen Lagerbestand per HTTP an."""
     url = f"{settings.warehouse_service_url.rstrip('/')}/stock"
     request = UrlRequest(
         url,

@@ -1,12 +1,4 @@
-"""Service-Schicht des billing-service: Saga-Command-Handling und Payment-Logik.
-
-Enthaelt die eigentliche Business-Logik, die sowohl vom RabbitMQ-Consumer
-(handle_billing_message, siehe lifespan() in main.py) als auch von den
-HTTP-Endpunkten (routes.py, fuer den Async-Webhook-Callback) genutzt wird.
-Kennt HTTP genausowenig wie RabbitMQ-Verbindungsdetails - spricht nur ueber
-messaging.py (Events publizieren) und payment/ (PaymentFacade) mit der
-Aussenwelt.
-"""
+"""Zahlungsverarbeitung des Billing-Service."""
 
 from decimal import Decimal
 import logging
@@ -34,13 +26,7 @@ def publish_payment_result(
         customer: dict | None = None,
         shipping_address: dict | None = None,
 ) -> None:
-    """Baut aus einem PaymentResult-Ausgang das passende Saga-Event und publiziert es.
-
-    Zentrale Stelle, die "SUCCEEDED" -> billing.payment.succeeded und jeden
-    anderen Status -> billing.payment.failed uebersetzt, damit diese
-    Payload-/Event-Type-Logik nicht an jeder Aufrufstelle (charge-,
-    confirm- und Webhook-Pfad) dupliziert werden muss.
-    """
+    """Publiziert das Saga-Ereignis eines Zahlungsergebnisses."""
     if status == "SUCCEEDED":
         event_type = "billing.payment.succeeded"
         event_payload = {
@@ -52,10 +38,7 @@ def publish_payment_result(
             "scenario": scenario,
             "paymentStatus": status,
         }
-        # Nur gesetzt, wenn der Anbieter (mit Sandbox-Credentials) echte
-        # Kaeufer-/Adressdaten zurueckgeliefert hat (siehe PaymentResult in
-        # payment/models.py) - shop-service uebernimmt diese dann in die
-        # Order und ueberschreibt damit die Checkout-Formular-Eingaben.
+        # Optionale Kundendaten stammen vom Zahlungsanbieter.
         if customer:
             event_payload["customer"] = customer
         if shipping_address:
@@ -99,31 +82,12 @@ def publish_payment_result(
 
 
 def handle_billing_message(message: dict) -> None:
-    """Verarbeitet eine einzelne RabbitMQ-Command-Nachricht fuer billing-service.
-
-    Wird von consume_messages() (messaging.py) fuer jede empfangene
-    Nachricht aufgerufen. Kennt drei Command-Typen, die hier jeweils in
-    einem eigenen if-Block behandelt werden (kein Dispatch-Dict, weil jeder
-    Zweig einen spuerbar unterschiedlichen Ablauf hat):
-
-      - billing.payment.confirm.requested: Nutzer ist vom Stripe-/PayPal-
-        Sandbox-Redirect zurueckgekehrt, hier wird der tatsaechliche
-        Zahlungsabschluss per get_status() (=Capture) geprueft.
-      - billing.refund.requested: Saga-Kompensation, erstattet eine bereits
-        erfolgreiche Zahlung.
-      - billing.payment.requested (Default/sonst): urspruengliche
-        Zahlungsanforderung, stoesst charge() an.
-
-    Jeder Zweig endet mit `return`, damit kein nachfolgender Zweig versehentlich
-    zusaetzlich ausgefuehrt wird.
-    """
+    """Verarbeitet Zahlungs-, Bestaetigungs- und Erstattungs-Commands."""
     if message["type"] == "billing.payment.confirm.requested":
         payload = message.get("payload", {})
         provider = payload.get("provider") or settings.payment_provider
         facade = get_payment_facade(provider)
         try:
-            # get_status() fuehrt bei PayPal den eigentlichen capture_order()
-            # aus - erst hier wird das Geld tatsaechlich eingezogen.
             result = facade.get_status(payload["transactionId"], correlation_id=message["correlationId"])
         except PaymentFacadeError as exc:
             publish_payment_result(
@@ -167,8 +131,7 @@ def handle_billing_message(message: dict) -> None:
         )
         return
 
-    # Kompensations-Command: eine zuvor erfolgreiche Zahlung soll rueckgaengig
-    # gemacht werden (z.B. weil ein spaeterer Saga-Schritt fehlschlug).
+    # Erstattung als Saga-Kompensation.
     if message["type"] == "billing.refund.requested":
         payload = message.get("payload", {})
         provider = payload.get("provider") or settings.payment_provider
@@ -225,16 +188,12 @@ def handle_billing_message(message: dict) -> None:
         publish_message("billing.refund.succeeded", event)
         return
 
-    # Alles ausser den beiden oben behandelten Typen ignorieren (z.B. falls
-    # die Queue-Bindings in messaging.py sich mal aendern und billing-service
-    # kurzzeitig auch fremde Routing-Keys sieht).
+    # Nicht gebundene Nachrichtentypen ignorieren.
     if message["type"] != "billing.payment.requested":
         return
     payload = message.get("payload", {})
     scenario = payload.get("scenario", "happy_path")
-    # Test-/Demo-Szenarien: ohne echten Adapter-Aufruf sofort ein
-    # fehlgeschlagenes Ergebnis simulieren (fuer Fehlerpfad-Tests der Saga,
-    # z.B. ueber shop-service order.payment.scenario steuerbar).
+    # Konfigurierbare Fehlerszenarien ohne Anbieteraufruf.
     if scenario in {"payment_failed", "payment_timeout"}:
         reason_code = "PAYMENT_TIMEOUT" if scenario == "payment_timeout" else "PAYMENT_DECLINED"
         publish_payment_result(
@@ -252,8 +211,7 @@ def handle_billing_message(message: dict) -> None:
         )
         return
 
-    # Regulaerer Zahlungsversuch: der eigentliche charge()-Aufruf gegen den
-    # konfigurierten Anbieter.
+    # Zahlung ueber den konfigurierten Anbieter.
     provider = payload.get("provider") or settings.payment_provider
     facade = get_payment_facade(provider)
     payment = dict(payload.get("payment", {}))
@@ -282,10 +240,7 @@ def handle_billing_message(message: dict) -> None:
             message=str(exc),
         )
         return
-    # PENDING = Redirect-Fall (echte Sandbox-Credentials) oder PayPal-Stub:
-    # noch KEIN Saga-Endergebnis. Stattdessen ein Zwischen-Event, das
-    # shop-service in PAYMENT_ACTION_REQUIRED versetzt (Redirect-URL) bzw.
-    # auf den spaeteren Webhook warten laesst.
+    # PENDING wartet auf Redirect-Bestaetigung oder Stub-Webhook.
     if result.status.value == "PENDING":
         event = build_message(
             "billing.payment.pending",

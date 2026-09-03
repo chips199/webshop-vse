@@ -1,10 +1,5 @@
 #!/usr/bin/env bash
-# Integrationstests fuer Happy Path und Fehlerszenarien des Bestellprozesses.
-# Laeuft gegen einen bereits per `docker compose up` gestarteten Stack (siehe
-# root README.md, Abschnitt "Tests"). Anders als scripts/smoke-test.sh (das
-# nur grob prueft, ob alles erreichbar ist und EIN Happy-Path-Auftrag
-# durchlaeuft) deckt dieses Skript gezielt den kompletten Bestellprozess samt
-# Saga-Kompensation ab:
+# Integrationstests gegen einen laufenden Docker-Compose-Stack:
 #
 #   1. Happy Path            -> Order=COMPLETED, vollstaendige Event-Kette
 #   2. Zahlung abgelehnt     -> Order=PAYMENT_FAILED, Warehouse-Reservierung
@@ -12,9 +7,7 @@
 #   3. Lager nicht ausreichend -> Order=OUT_OF_STOCK, KEIN weiterer Aufruf
 #                                (keine Zahlung, keine Rechnung)
 #
-# Jedes Szenario prueft zusaetzlich per Audit-Endpunkt, dass die erwartete
-# Event-Kette tatsaechlich als Audit-Snapshot vorliegt - nicht nur der
-# Endstatus der Bestellung.
+# Jedes Szenario prueft Endstatus und Audit-Ereignisse.
 set -euo pipefail
 
 SHOP_API="${SHOP_API:-http://localhost:8000}"
@@ -28,7 +21,7 @@ json_field() {
 }
 
 event_types() {
-  # Liest eventType je Snapshot aus der Admin-Audit-Antwort, eine Zeile pro Event.
+  # Ein eventType pro Zeile.
   python3 -c 'import json, sys; [print(s["eventType"]) for s in json.load(sys.stdin).get("snapshots", [])]'
 }
 
@@ -42,7 +35,7 @@ admin_login() {
 }
 
 create_order() {
-  # $1 = correlationId, $2 = payment scenario (happy_path/payment_failed/out_of_stock/...)
+  # $1: correlationId, $2: Zahlungsszenario
   local correlation_id="$1"
   local scenario="$2"
   curl -fsS \
@@ -71,8 +64,7 @@ wait_for_status() {
 }
 
 assert_events_present() {
-  # Prueft, dass jeder angegebene eventType (Substring-Match reicht, siehe
-  # unten) mindestens einmal in der Audit-Timeline der Bestellung vorkommt.
+  # Alle angegebenen eventTypes muessen vorkommen.
   local order_id="$1"
   local cookie_file="$2"
   shift 2
@@ -91,8 +83,7 @@ assert_events_present() {
 }
 
 assert_events_absent() {
-  # Prueft, dass KEIN angegebener eventType in der Audit-Timeline vorkommt -
-  # zum Nachweis von "kein weiterer Aufruf erfolgt" (Lager nicht ausreichend).
+  # Keiner der angegebenen eventTypes darf vorkommen.
   local order_id="$1"
   local cookie_file="$2"
   shift 2

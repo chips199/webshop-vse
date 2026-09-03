@@ -1,10 +1,4 @@
-"""Service-Schicht des invoice-service.
-
-Enthaelt die Business-Logik fuer das RabbitMQ-Command-Handling
-(handle_invoice_message()) sowie die Umwandlung eines DB-Rows in die
-API-Antwortform (_serialize_invoice()), die von routes.py genutzt wird.
-Die eigentliche PDF-Erzeugung liegt getrennt in pdf.py.
-"""
+"""Rechnungserstellung des Invoice-Service."""
 
 import logging
 from uuid import uuid4
@@ -17,24 +11,13 @@ logger = logging.getLogger(__name__)
 
 
 def handle_invoice_message(message: dict) -> None:
-    """Verarbeitet EIN "invoice.create.requested"-Command mit genau einem Versuch.
-
-    Die Retry-Orchestrierung liegt in der Shop-Saga, da nur shop-service den
-    Zustand des zugehoerigen Circuit Breakers kennt. Schlaegt die
-    Rechnungserstellung fehl, wird nach genau einem Versuch
-    "invoice.failed" veroeffentlicht - inklusive "attempt" und der fachlichen
-    Zahlungsdaten (provider/amount/currency/scenario), damit shop-service daraus
-    bei Bedarf einen neuen "invoice.create.requested" mit attempt+1 bauen kann,
-    ohne dass invoice-service selbst Retry-Zustand halten muss.
-    """
+    """Verarbeitet einen einzelnen Rechnungsversuch."""
     if message["type"] != "invoice.create.requested":
         return
 
     payload = message.get("payload", {})
     invoice_id = str(uuid4())
-    # attempt kommt von shop-service (1 beim Erstversuch, sonst hochgezaehlt) -
-    # invoice-service nutzt den Wert nur zum Protokollieren/Speichern, nicht
-    # fuer eigene Retry-Entscheidungen.
+    # Die Shop-Saga verwaltet die Versuchsnummer.
     attempt = payload.get("attempt", 1)
 
     try:
@@ -90,8 +73,7 @@ def handle_invoice_message(message: dict) -> None:
 
 
 def _serialize_invoice(invoice: dict) -> dict:
-    """Wandelt einen DB-Row-Dict in die API-Antwortform um (UUIDs als str,
-    abgeleitete downloadUrl nur wenn ueberhaupt eine PDF existiert)."""
+    """Serialisiert einen Rechnungsdatensatz fuer die API."""
     invoice_id = str(invoice["invoiceId"])
     return {
         **invoice,

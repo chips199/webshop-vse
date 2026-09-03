@@ -9,18 +9,10 @@ from .config import settings
 
 
 class JsonFormatter(logging.Formatter):
-    """Formatiert jeden Log-Eintrag als einzeiliges JSON-Objekt.
-
-    Damit sind Logs strukturiert (statt Freitext) und koennen von einem
-    zentralen Log-Stack (Loki/Grafana, siehe docs/log-management.md) direkt
-    geparst und nach Feldern wie correlationId oder orderId gefiltert werden.
-    """
+    """Formatiert Log-Eintraege als einzeiliges JSON."""
 
     def format(self, record: logging.LogRecord) -> str:
-        # "context" und "correlation_id" sind keine Standard-LogRecord-Felder,
-        # sondern werden von den Call-Sites ueber logger.info(..., extra={...})
-        # mitgegeben (siehe z.B. main.py). getattr() mit Default schuetzt vor
-        # Log-Aufrufen ohne diese Extras.
+        # Optionale Felder werden von den Aufrufstellen per extra mitgegeben.
         context = getattr(record, "context", {})
         payload: dict[str, Any] = {
             "service": settings.service_name,
@@ -30,23 +22,14 @@ class JsonFormatter(logging.Formatter):
             "correlationId": getattr(record, "correlation_id", None),
             "context": context,
         }
-        # Fachliche Zusatzfelder aus "context" zusaetzlich auf der obersten
-        # JSON-Ebene duplizieren (sofern der Schluessel noch frei ist) -
-        # erleichtert das Filtern/Gruppieren im Log-Dashboard, ohne dass man
-        # dort erst in ein verschachteltes "context"-Objekt greifen muss.
+        # Kontextfelder sind fuer direkte Filter zusaetzlich auf oberster Ebene verfuegbar.
         if isinstance(context, dict):
             payload.update({key: value for key, value in context.items() if key not in payload})
         return json.dumps(payload, default=str)
 
 
 def configure_logging() -> None:
-    """Richtet das Root-Logging fuer den gesamten Service einmalig ein.
-
-    Wird beim Start von main.py aufgerufen, bevor irgendein Logger benutzt
-    wird. Schreibt strukturierte JSON-Logs sowohl auf stdout (fuer
-    docker logs / den zentralen Log-Stack) als auch in eine taeglich
-    rotierende Datei unter ./logs (14 Tage Aufbewahrung).
-    """
+    """Konfiguriert JSON-Logs fuer stdout und taeglich rotierende Dateien."""
     formatter = JsonFormatter()
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
@@ -61,14 +44,11 @@ def configure_logging() -> None:
     )
     file_handler.setFormatter(formatter)
 
-    # Vorhandene Handler entfernen, damit configure_logging() nicht bei
-    # mehrfachem Aufruf (z.B. in Tests) doppelte Log-Zeilen erzeugt.
+    # Doppelte Handler bei erneutem Aufruf vermeiden.
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(stream_handler)
     root.addHandler(file_handler)
     root.setLevel(logging.INFO)
-    # pika (RabbitMQ-Client) loggt auf INFO-Level sehr geschwaetzig
-    # (Verbindungsaufbau etc.) - auf WARNING gedrosselt, damit die eigenen
-    # fachlichen Logs nicht untergehen.
+    # Verbindungsdetails von pika nur ab WARNING protokollieren.
     logging.getLogger("pika").setLevel(logging.WARNING)

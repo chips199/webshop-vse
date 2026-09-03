@@ -1,17 +1,17 @@
-"""Pydantic-Schemas (Request-/Response-Modelle) des invoice-service."""
+"""API-Datenmodelle des Invoice-Service."""
 
 from pydantic import BaseModel
 
 
 class HealthResponse(BaseModel):
-    """Antwort des /health-Endpunkts (fuer Docker-Healthchecks/Monitoring)."""
+    """Antwort des Health-Endpunkts."""
 
     status: str = "ok"
     service: str
 
 
 class InvoiceResponse(BaseModel):
-    """Metadaten einer Rechnung, wie sie ueber GET /invoices/{invoiceId} geliefert werden."""
+    """Metadaten einer Rechnung."""
 
     invoiceId: str
     orderId: str

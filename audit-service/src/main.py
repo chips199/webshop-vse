@@ -1,16 +1,4 @@
-"""FastAPI-Entry-Point (Composition Root) des audit-service.
-
-Reine Zusammensetzung: erzeugt die FastAPI-App, verdrahtet Middleware,
-Fehler-Handler und den RabbitMQ-Consumer-Thread, und bindet den HTTP-Router
-ein. Business-Logik gibt es hier nicht: audit-service ist ein generischer
-Event-Sink ohne Business-Wissen ueber Shop
-oder Zahlung: er bindet sich auf JEDE Nachricht auf dem gemeinsamen Exchange
-(Routing-Key "#", siehe messaging.py) und speichert sie unveraendert als
-Audit-Snapshot (insert_snapshot_from_message() in database.py, der
-Repository-Schicht). Die HTTP-Seite (routes.py) liest ebenfalls direkt aus
-der Repository-Schicht - eine eigene Service-Schicht wuerde hier nur
-unnoetig delegieren.
-"""
+"""FastAPI-Anwendung des Audit-Service."""
 
 from contextlib import asynccontextmanager
 import logging
@@ -34,13 +22,7 @@ consumer_thread: threading.Thread | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startet/stoppt den RabbitMQ-Consumer-Thread synchron mit der FastAPI-App.
-
-    insert_snapshot_from_message wird direkt als Handler durchgereicht -
-    anders als bei den anderen Services gibt es hier keine eigene
-    "handle_message"-Zwischenschicht, weil audit-service jede Nachricht
-    ohnehin 1:1 (ohne Fallunterscheidung) in einen Snapshot uebersetzt.
-    """
+    """Verwaltet Datenbank und RabbitMQ-Consumer waehrend der App-Laufzeit."""
     global consumer_thread
     init_database()
     stop_consumer_event.clear()
@@ -52,9 +34,6 @@ async def lifespan(app: FastAPI):
     consumer_thread.start()
     logger.info("Audit event consumer started")
     yield
-    # Sauberer Shutdown: stop_consumer_event signalisiert dem Consumer-Loop
-    # in messaging.py, sich zu beenden; join() mit Timeout verhindert, dass
-    # ein haengender Thread den App-Shutdown blockiert.
     stop_consumer_event.set()
     if consumer_thread:
         consumer_thread.join(timeout=3)
@@ -62,8 +41,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Audit Service API", version="0.1.0", lifespan=lifespan)
 register_problem_handlers(app)
-# CORS: audit-service liefert keine Cookies/Sessions (allow_credentials=False),
-# der Endpunkt wird ausschliesslich lesend genutzt (GET /audit/orders/{id}).
+# Zugriff des lokalen Frontends auf die Audit-Endpunkte.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
@@ -76,8 +54,7 @@ app.add_middleware(
 
 @app.middleware("http")
 async def correlation_id_middleware(request: Request, call_next):
-    """Liest X-Correlation-Id aus eingehenden Requests oder erzeugt eine neue,
-    und haengt sie an die Response an."""
+    """Uebernimmt oder erzeugt die Korrelations-ID eines Requests."""
     correlation_id = request.headers.get("X-Correlation-Id") or str(uuid4())
     request.state.correlation_id = correlation_id
     response: Response = await call_next(request)
@@ -85,5 +62,4 @@ async def correlation_id_middleware(request: Request, call_next):
     return response
 
 
-# Bindet die beiden HTTP-Endpunkte aus routes.py ein (Router-Schicht).
 app.include_router(router)

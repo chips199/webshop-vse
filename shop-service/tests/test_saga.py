@@ -11,9 +11,7 @@ def _message(message_type: str, payload: dict, message_id: str = "msg-1", correl
 
 
 class FreshCircuitBreakerTestCase(unittest.TestCase):
-    """Basisklasse fuer Tests, die den Invoice-Circuit-Breaker beruehren -
-    ersetzt das Modul-Singleton durch eine frische Instanz, damit Tests sich
-    nicht gegenseitig ueber den gemeinsamen Zustand beeinflussen."""
+    """Ersetzt den gemeinsamen Circuit Breaker vor jedem Test."""
 
     def setUp(self) -> None:
         self._original_breaker = saga.invoice_circuit_breaker

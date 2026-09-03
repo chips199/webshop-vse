@@ -14,7 +14,6 @@ gerenderten Diagramme selbst sind zur besseren Lesbarkeit weiterhin inline in
 | `sequenz-fehlerszenario-zahlung-abgelehnt.mmd` | Sequenzdiagramm (Fehlerszenario) | 6.2 Zahlung abgelehnt |
 | `sequenz-fehlerszenario-rechnung-fehlgeschlagen.mmd` | Sequenzdiagramm (Fehlerszenario) | 6.3 Invoice-Service nicht erreichbar |
 | `sequenz-fehlerszenario-asynchrone-zahlung.mmd` | Sequenzdiagramm (Fehlerszenario) | 6.4 Asynchrone Zahlung |
-| `sequenz-fehlerszenario-warehouse-commit-fehlgeschlagen.mmd` | Sequenzdiagramm (Fehlerszenario) | - |
 
 Jede `.mmd`-Datei laesst sich z.B. mit dem [Mermaid Live Editor](https://mermaid.live)
 oder `mmdc` (mermaid-cli) unabhaengig rendern.

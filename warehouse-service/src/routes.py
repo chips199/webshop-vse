@@ -1,11 +1,4 @@
-"""HTTP-Router (Router-Schicht) des warehouse-service.
-
-Synchrone REST-Endpunkte fuer Lagerbestand (GET/POST/PATCH /stock), die z.B.
-vom Shop-Service fuer die Produktkatalog-Anzeige und vom Admin-Dashboard fuer
-die Bestandspflege genutzt werden. Reine CRUD-Weiterleitung an die
-Repository-Schicht (database.py) - keine eigene Service-Funktion noetig, da
-hier ausser Serialisierung/Statuscode-Mapping keine Business-Logik anfaellt.
-"""
+"""HTTP-Endpunkte des Warehouse-Service."""
 
 from fastapi import APIRouter, HTTPException
 
@@ -23,7 +16,7 @@ async def health() -> HealthResponse:
 
 @router.get("/stock", response_model=list[StockResponse])
 async def stock() -> list[StockResponse]:
-    """Liefert den kompletten Lagerbestand (z.B. fuer Produktkatalog/Admin-Dashboard)."""
+    """Liefert den gesamten Lagerbestand."""
     return [
         StockResponse(
             productId=str(entry["productId"]),
@@ -38,8 +31,7 @@ async def stock() -> list[StockResponse]:
 
 @router.post("/stock", response_model=StockResponse)
 async def post_stock(request: StockCreateRequest) -> StockResponse:
-    """Legt einen neuen Lagerbestand-Eintrag an oder aktualisiert ihn
-    (create_stock() ist idempotent via ON CONFLICT, siehe database.py)."""
+    """Legt einen Lagerbestand an oder aktualisiert ihn."""
     created = create_stock(request.productId, request.quantityOnHand, request.location)
     return StockResponse(
         productId=str(created["productId"]),
@@ -52,11 +44,7 @@ async def post_stock(request: StockCreateRequest) -> StockResponse:
 
 @router.patch("/stock/{productId}", response_model=StockResponse)
 async def patch_stock(productId: str, request: StockUpdateRequest) -> StockResponse:
-    """Aktualisiert quantityOnHand/location eines bestehenden Produkts (Admin-Pflege).
-
-    409, falls die neue Menge unter die bereits reservierte Menge faellt
-    (siehe ValueError in update_stock()); 404, falls das Produkt nicht existiert.
-    """
+    """Aktualisiert Menge und Lagerort eines Produkts."""
     try:
         updated = update_stock(productId, request.quantityOnHand, request.location)
     except ValueError as exc:

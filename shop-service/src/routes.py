@@ -1,12 +1,4 @@
-"""HTTP-Router (Router-Schicht) des shop-service.
-
-Enthaelt alle synchronen REST-Endpunkte: oeffentlicher Produktkatalog und
-Checkout (/products, /orders/...), sowie das komplette Admin-Dashboard-
-Backend (Login, Bestelluebersicht, Audit-Timeline, Echtzeit-Updates per SSE,
-Produktverwaltung). Business-Logik ist in service.py (Router-Hilfsfunktionen,
-Serialisierung), saga.py (Saga-Schritte, die vom HTTP-Layer ausgeloest
-werden) und clients.py (HTTP-Aufrufe an warehouse-/audit-service) ausgelagert.
-"""
+"""HTTP-Endpunkte des Shop-Service."""
 
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -82,8 +74,7 @@ async def health() -> HealthResponse:
 
 @router.get("/products", response_model=list[ProductResponse])
 async def list_products(request: Request, response: Response) -> list[ProductResponse]:
-    """Oeffentlicher Produktkatalog inkl. Live-Lagerbestand (No-Store-Cache,
-    damit Verfuegbarkeitsstatus nie veraltet aus dem Browser-Cache kommt)."""
+    """Liefert den Produktkatalog mit aktuellem Lagerbestand."""
     response.headers["Cache-Control"] = "no-store"
     stock_by_product_id = fetch_warehouse_stock(request.state.correlation_id)
     return [
@@ -94,16 +85,7 @@ async def list_products(request: Request, response: Response) -> list[ProductRes
 
 @router.post("/orders", response_model=OrderResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_order(request: Request, order: CreateOrderRequest) -> OrderResponse:
-    """Startet die Saga: legt die Bestellung an (Status PENDING) und
-    publiziert order.created sowie den ersten Saga-Schritt
-    (warehouse.reserve.requested). 202 Accepted statt 201/200, da die
-    Verarbeitung danach vollstaendig asynchron ueber RabbitMQ weiterlaeuft.
-
-    Ist ein Idempotency-Key-
-    Header gesetzt und wurde er schon einmal fuer denselben Request-Body
-    verwendet, wird die bereits angelegte Bestellung zurueckgegeben statt
-    eine zweite anzulegen; bei gleichem Key aber anderem Body gibt es 409.
-    """
+    """Legt eine Bestellung idempotent an und startet die Saga."""
     correlation_id = request.state.correlation_id
     idempotency_key = _idempotency_key_from_request(request)
     request_hash = _request_hash(order)
@@ -143,13 +125,7 @@ async def create_order(request: Request, order: CreateOrderRequest) -> OrderResp
             request_hash,
         )
     except UniqueViolation as exc:
-        # Race Condition: zwei parallele Requests mit demselben Idempotency-
-        # Key haben den Vorab-Check oben beide "nicht gefunden" gesehen und
-        # versuchen nun gleichzeitig, die Bestellung anzulegen - der
-        # eindeutige Index auf idempotency_key (siehe database.py) laesst
-        # nur den ersten INSERT durch. Statt den Fehler durchzureichen, wird
-        # hier die vom konkurrierenden Request angelegte Bestellung
-        # nachgeladen und wie ein normaler Idempotenz-Treffer behandelt.
+        # Der eindeutige Index entscheidet konkurrierende Requests mit gleichem Key.
         if not idempotency_key:
             raise
         existing_order = get_order_by_idempotency_key(idempotency_key)
@@ -211,8 +187,7 @@ async def create_order(request: Request, order: CreateOrderRequest) -> OrderResp
 
 @router.get("/orders/{orderId}", response_model=OrderResponse)
 async def get_order(orderId: str) -> OrderResponse:
-    """Liefert den aktuellen Saga-/Bestellstatus (Frontend pollt diesen
-    Endpunkt waehrend der asynchronen Verarbeitung)."""
+    """Liefert den aktuellen Bestellstatus."""
     order = get_order_record(orderId)
     if not order:
         raise HTTPException(status_code=404, detail=f"Order {orderId} not found")
@@ -221,11 +196,7 @@ async def get_order(orderId: str) -> OrderResponse:
 
 @router.post("/orders/{orderId}/payment-confirmation", response_model=OrderResponse, status_code=status.HTTP_202_ACCEPTED)
 async def confirm_order_payment(orderId: str, confirmation: PaymentConfirmationRequest) -> OrderResponse:
-    """Kunde bestaetigt oder storniert eine ausstehende externe Zahlung
-    (z.B. nach Rueckkehr von einer PayPal-Sandbox-Seite). Bei "approved"
-    wird billing.payment.confirm.requested publiziert (billing-service
-    fuehrt dann den eigentlichen Capture durch), bei "cancelled" direkt die
-    Warehouse-Reservierung storniert."""
+    """Bestaetigt oder storniert eine ausstehende externe Zahlung."""
     order = get_order_record(orderId)
     if not order:
         raise HTTPException(status_code=404, detail=f"Order {orderId} not found")
@@ -234,12 +205,7 @@ async def confirm_order_payment(orderId: str, confirmation: PaymentConfirmationR
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Order {orderId} is not awaiting a payment confirmation (status={order['status']}).",
         )
-    # Claim ist die eigentliche (atomare) Absicherung gegen doppelte Aufrufe;
-    # die Pruefung oben ist nur ein schneller Vorab-Check fuer den 404/409-Fall
-    # ohne Beruehrung der Order. Zwischen diesem SELECT und dem claim liegt
-    # zwar weiterhin ein Zeitfenster, aber das UPDATE...WHERE status=... in
-    # claim_payment_confirmation() laesst bei einem parallelen Zweitaufruf
-    # keinen zweiten Treffer zu - siehe Docstring dort.
+    # Der atomare Claim verhindert doppelte Bestaetigungen.
     if not claim_payment_confirmation(orderId):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -279,9 +245,7 @@ async def confirm_order_payment(orderId: str, confirmation: PaymentConfirmationR
 
 @router.post("/admin/login", response_model=AdminSessionResponse)
 async def admin_login(credentials: AdminLoginRequest, response: Response) -> AdminSessionResponse:
-    """Prueft Admin-Zugangsdaten und setzt bei Erfolg ein httpOnly-
-    Session-Cookie (siehe require_admin() fuer die Pruefung auf den
-    folgenden Requests)."""
+    """Prueft Admin-Zugangsdaten und setzt ein HttpOnly-Session-Cookie."""
     if not verify_admin_credentials(credentials.username, credentials.password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
     token = secrets.token_urlsafe(32)
@@ -301,7 +265,7 @@ async def admin_login(credentials: AdminLoginRequest, response: Response) -> Adm
 
 @router.post("/admin/logout", response_model=AdminSessionResponse)
 async def admin_logout(request: Request, response: Response) -> AdminSessionResponse:
-    """Loescht die Server-seitige Session sowie das Cookie."""
+    """Loescht Admin-Session und Cookie."""
     token = request.cookies.get(ADMIN_SESSION_COOKIE)
     if token:
         delete_admin_session(_token_hash(token))
@@ -311,23 +275,19 @@ async def admin_logout(request: Request, response: Response) -> AdminSessionResp
 
 @router.get("/admin/session", response_model=AdminSessionResponse)
 async def admin_session(username: str = Depends(require_admin)) -> AdminSessionResponse:
-    """Erlaubt dem Frontend zu pruefen, ob eine bestehende Session noch
-    gueltig ist (z.B. beim Neuladen der Admin-Seite)."""
+    """Bestaetigt eine gueltige Admin-Session."""
     return AdminSessionResponse(authenticated=True, username=username)
 
 
 @router.get("/admin/orders", response_model=list[AdminOrderResponse])
 async def admin_orders(_: str = Depends(require_admin)) -> list[AdminOrderResponse]:
-    """Bestelluebersicht fuer das Admin-Dashboard (neueste zuerst, siehe
-    list_admin_orders())."""
+    """Liefert die Bestelluebersicht des Admin-Dashboards."""
     return [AdminOrderResponse(**_serialize_order(order)) for order in list_admin_orders()]
 
 
 @router.get("/admin/orders/{orderId}/audit", response_model=AdminAuditResponse)
 async def admin_order_audit(orderId: str, _: str = Depends(require_admin)) -> AdminAuditResponse:
-    """Liefert die vollstaendige Audit-Snapshot-Timeline einer Bestellung
-    ueber alle Services hinweg (per HTTP-Aufruf an audit-service, siehe
-    fetch_audit_snapshots())."""
+    """Liefert die Audit-Timeline einer Bestellung."""
     order = get_order_record(orderId)
     if not order:
         raise HTTPException(status_code=404, detail=f"Order {orderId} not found")
@@ -339,37 +299,18 @@ async def admin_order_audit(orderId: str, _: str = Depends(require_admin)) -> Ad
 
 @router.get("/admin/orders/events")
 async def admin_orders_events(request: Request, _: str = Depends(require_admin)) -> StreamingResponse:
-    """Server-Sent-Events-Stream fuer Echtzeit-Updates im Admin-Dashboard.
-
-    Statt bei jeder Aenderung den vollen Bestellzustand zu pushen (was hier
-    doppelte Business-Logik ggue. den bestehenden REST-Endpunkten bedeuten
-    wuerde), sendet dieser Stream nur ein minimales "orderId X hat sich
-    veraendert"-Signal (siehe realtime.py/notify_admin_dashboard in saga.py).
-    Das Frontend reagiert darauf, indem es die Bestellliste bzw. die gerade
-    geoeffnete Detailansicht per bestehendem REST-Aufruf neu laedt - einzige
-    Quelle der Wahrheit bleibt die Datenbank, nicht der Event-Stream selbst.
-    """
+    """Streamt Aenderungssignale fuer Bestellungen per SSE."""
 
     async def event_stream():
         subscriber_queue = realtime.subscribe()
         try:
-            # Direkt nach Verbindungsaufbau ein Kommentar-Event senden, damit
-            # der Browser die SSE-Verbindung sofort als erfolgreich geoeffnet
-            # erkennt (EventSource wertet erst eine "data:"-Zeile als Event,
-            # ein Kommentar reicht aber schon, um die Verbindung "warm" zu
-            # halten und Proxies/Load-Balancer nicht vorzeitig timeouten zu
-            # lassen).
+            # Initialer SSE-Kommentar oeffnet und haelt die Verbindung aktiv.
             yield ": connected\n\n"
             while True:
                 if await request.is_disconnected():
                     break
                 try:
-                    # queue.Queue.get() ist blockierend (Thread-API) - daher
-                    # im Executor ausfuehren, damit der asyncio-Event-Loop
-                    # waehrenddessen andere Requests/Verbindungen bedienen
-                    # kann. Der Timeout sorgt dafuer, dass request.is_
-                    # disconnected() regelmaessig neu geprueft wird, auch
-                    # wenn gerade keine Events ankommen.
+                    # Blockierenden Queue-Zugriff ausserhalb des Event-Loops ausfuehren.
                     event = await asyncio.get_running_loop().run_in_executor(
                         None, _get_with_timeout, subscriber_queue, 15.0
                     )
@@ -385,29 +326,20 @@ async def admin_orders_events(request: Request, _: str = Depends(require_admin))
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            # Defensiv: viele Reverse-Proxies (z.B. Nginx) puffern
-            # Streaming-Responses standardmaessig, was SSE-Events nur
-            # verzoegert oder gar nicht beim Browser ankommen liesse. Im
-            # lokalen Docker-Compose-Aufbau ruft das Frontend shop-service
-            # zwar direkt auf (kein Nginx davor, siehe frontend/nginx.conf),
-            # der Header schadet aber nicht und macht den Endpunkt auch
-            # hinter einem echten Reverse-Proxy sofort funktionsfaehig.
+            # Proxy-Pufferung fuer SSE deaktivieren.
             "X-Accel-Buffering": "no",
         },
     )
 
 
 def _get_with_timeout(q: "queue.Queue", timeout: float):
-    """Kleiner Wrapper um Queue.get(), damit run_in_executor() sauber mit
-    dem `timeout`-Keyword-Argument statt einer positional-only-Signatur
-    umgehen kann."""
+    """Ruft Queue.get mit Timeout auf."""
     return q.get(timeout=timeout)
 
 
 @router.get("/admin/products", response_model=list[ProductResponse])
 async def admin_products(request: Request, _: str = Depends(require_admin)) -> list[ProductResponse]:
-    """Wie /products, aber hinter Admin-Login (Basis fuer die
-    Produktverwaltung im Dashboard)."""
+    """Liefert Produkte und Bestand fuer das Admin-Dashboard."""
     stock_by_product_id = fetch_warehouse_stock(request.state.correlation_id)
     return [
         ProductResponse(**_serialize_product(product, stock_by_product_id.get(str(product["id"]))))
@@ -420,15 +352,7 @@ async def admin_upload_product_image(
     file: UploadFile = File(...),
     _: str = Depends(require_admin),
 ) -> ImageUploadResponse:
-    """Nimmt ein Produktbild entgegen, validiert Typ/Groesse und speichert es
-    unter einem sicheren, kollisionsfreien Dateinamen im Upload-Verzeichnis.
-
-    Der Dateiname wird NIE 1:1 vom Original-Upload uebernommen: der Stem wird
-    auf a-z0-9/Bindestrich normalisiert (verhindert Path-Traversal/
-    Sonderzeichen-Probleme) und um ein zufaelliges Suffix ergaenzt
-    (verhindert, dass zwei Uploads mit gleichem Namen sich gegenseitig
-    ueberschreiben).
-    """
+    """Validiert und speichert ein Produktbild unter einem sicheren Dateinamen."""
     content_types = {
         "image/png": ".png",
         "image/jpeg": ".jpg",
@@ -456,10 +380,7 @@ async def admin_create_product(
     product: ProductCreateRequest,
     _: str = Depends(require_admin),
 ) -> ProductResponse:
-    """Legt ein neues Produkt UND (in einem zweiten Schritt) den zugehoerigen
-    initialen Lagerbestand in warehouse-service an - zwei separate
-    Datenbanken (product_id existiert erst nach dem ersten Aufruf), daher
-    kein gemeinsamer Transaktionsrahmen."""
+    """Legt ein Produkt und dessen Anfangsbestand an."""
     product_id = str(uuid4())
     product_payload = product.model_dump(exclude={"quantityOnHand", "location"})
     created = create_product_record(product_id, product_payload)
@@ -481,8 +402,7 @@ async def admin_update_product(
     product: ProductUpdateRequest,
     _: str = Depends(require_admin),
 ) -> ProductResponse:
-    """Aktualisiert die Stammdaten (Name/Preis/Bild/...) eines Produkts.
-    Beruehrt NICHT den Lagerbestand - dafuer siehe admin_update_product_stock()."""
+    """Aktualisiert die Stammdaten eines Produkts."""
     updated = update_product_record(productId, product.model_dump())
     if updated is None:
         raise HTTPException(status_code=404, detail=f"Product {productId} not found")
@@ -497,9 +417,7 @@ async def admin_update_product_stock(
     stock: StockUpdateRequest,
     _: str = Depends(require_admin),
 ) -> ProductResponse:
-    """Aktualisiert nur den Lagerbestand (Menge/Lagerort) eines Produkts -
-    delegiert an warehouse-service, das die eigentliche Bestandstabelle
-    haelt (shop-service besitzt keine eigenen Bestandsdaten)."""
+    """Aktualisiert den Lagerbestand eines Produkts im Warehouse-Service."""
     update_warehouse_stock(productId, stock.model_dump(), request.state.correlation_id)
     product = next((entry for entry in get_products() if str(entry["id"]) == productId), None)
     if product is None:

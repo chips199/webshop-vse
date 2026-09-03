@@ -1,7 +1,4 @@
-"""Pydantic-Schemas (Response-Modelle) des audit-service.
-
-Reine Datenklassen ohne Verhalten, genutzt von routes.py.
-"""
+"""API-Datenmodelle des Audit-Service."""
 
 from datetime import datetime
 from typing import Any
@@ -16,7 +13,7 @@ class HealthResponse(BaseModel):
 
 
 class AuditSnapshot(BaseModel):
-    """Antwort-Schema fuer einen einzelnen Snapshot."""
+    """Ein Audit-Snapshot."""
 
     id: UUID
     correlationId: UUID

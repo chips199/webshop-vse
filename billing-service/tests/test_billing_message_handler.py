@@ -11,8 +11,7 @@ def _message(message_type: str, payload: dict, message_id: str = "msg-1", correl
 
 
 class HandleBillingPaymentRequestedTest(unittest.TestCase):
-    """Deckt den default/sonst-Zweig von handle_billing_message() ab: den
-    urspruenglichen Zahlungsversuch (billing.payment.requested)."""
+    """Tests fuer billing.payment.requested."""
 
     def _payload(self, **overrides) -> dict:
         payload = {
@@ -101,8 +100,7 @@ class HandleBillingPaymentRequestedTest(unittest.TestCase):
 
 
 class HandleBillingPaymentConfirmRequestedTest(unittest.TestCase):
-    """Deckt billing.payment.confirm.requested ab - der Redirect-Rueckkehr-Pfad,
-    bei dem get_status() (=Capture bei PayPal) den tatsaechlichen Ausgang liefert."""
+    """Tests fuer billing.payment.confirm.requested."""
 
     def _payload(self, **overrides) -> dict:
         payload = {

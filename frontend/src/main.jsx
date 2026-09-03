@@ -140,11 +140,7 @@ function loadStoredCart() {
 }
 
 function buildOrderConfirmation(confirmedOrder, { customer, shippingAddress, items, provider, total }) {
-  // confirmedOrder.customer/.shippingAddress kommen vom Backend und sind nur
-  // gesetzt, wenn der Kaeufer sie auf der echten Stripe-/PayPal-Sandbox-Seite
-  // eingegeben hat (siehe billing-service PaymentResult). Erst dann werden
-  // sie bevorzugt - sonst bleiben die im eigenen Checkout-Formular erfassten
-  // Werte stehen (z.B. im lokalen Stub-Modus ohne Sandbox-Credentials).
+  // Anbieterdaten haben Vorrang vor den Angaben aus dem Checkout-Formular.
   return {
     order: confirmedOrder,
     customer: confirmedOrder.customer || customer,
@@ -297,7 +293,7 @@ function App() {
         throw new Error(`Bestellung fehlgeschlagen: HTTP ${response.status}`);
       }
       const created = await response.json();
-      // Order kommt PENDING zurueck; shop-service prueft erst Lager, bevor es Zahlung beauftragt.
+      // Die Zahlung startet erst nach erfolgreicher Lagerpruefung.
       const confirmedOrder = (await waitForOrderStatus(created.orderId)) || created;
 
       if (confirmedOrder.status === "PAYMENT_ACTION_REQUIRED" && confirmedOrder.paymentRedirectUrl) {
@@ -997,11 +993,7 @@ function AdminPage() {
   const [activeAdminView, setActiveAdminView] = useState("orders");
   const [liveStatus, setLiveStatus] = useState("connecting");
 
-  // Ref statt State: der SSE-useEffect unten soll die Verbindung NICHT bei
-  // jedem Klick auf eine andere Bestellung neu aufbauen, braucht aber trotzdem
-  // Zugriff auf die aktuell ausgewaehlte Bestellung, um bei einem passenden
-  // Live-Event gezielt deren Timeline nachzuladen (siehe flushPendingReload
-  // im SSE-useEffect weiter unten).
+  // Die Ref haelt die Auswahl aktuell, ohne die SSE-Verbindung neu aufzubauen.
   const selectedOrderIdRef = useRef(null);
   useEffect(() => {
     selectedOrderIdRef.current = selectedOrder?.orderId ?? null;
@@ -1020,18 +1012,14 @@ function AdminPage() {
     loadAdminProducts();
   }, [session.authenticated]);
 
-  // Server-Sent Events aktualisieren Bestellliste und geoeffnete Details,
-  // ohne dass der Browser pollen muss.
+  // Server-Sent Events aktualisieren Liste und geoeffnete Details.
   useEffect(() => {
     if (!session.authenticated) return undefined;
 
     setLiveStatus("connecting");
     const source = new EventSource(`${SHOP_API}/admin/orders/events`, { withCredentials: true });
 
-    // Mehrere Saga-Events fuer dieselbe Bestellung koennen kurz hintereinander
-    // eintreffen (z.B. Reservierung, Zahlung, Rechnung, Warehouse-Commit beim
-    // Happy Path). Statt bei jedem einzelnen Event sofort neu zu laden, wird
-    // kurz gesammelt und dann in einem Rutsch aktualisiert.
+    // Kurz aufeinanderfolgende Saga-Ereignisse gemeinsam verarbeiten.
     let debounceTimer = null;
     const pendingOrderIds = new Set();
 
@@ -1046,9 +1034,7 @@ function AdminPage() {
 
     source.onopen = () => setLiveStatus("live");
     source.onerror = () => {
-      // EventSource baut die Verbindung nach einem Fehler automatisch
-      // wieder auf - hier wird nur die Anzeige aktualisiert, kein manueller
-      // Reconnect noetig.
+      // EventSource verbindet sich nach Fehlern automatisch neu.
       setLiveStatus("offline");
     };
     source.onmessage = (event) => {
@@ -1074,10 +1060,7 @@ function AdminPage() {
   const statusOptions = useMemo(() => ["all", ...Array.from(new Set(orders.map((entry) => entry.status))).sort()], [orders]);
   const filteredOrders = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
-    // dateFrom/dateTo kommen aus <input type="date"> als "YYYY-MM-DD" (lokale
-    // Zeit) - dateFrom wird auf 00:00:00 des Tages verankert, dateTo auf
-    // 23:59:59.999, damit der gewaehlte Endtag noch vollstaendig eingeschlossen
-    // ist statt bei Mitternacht abgeschnitten zu werden.
+    // Datumsgrenzen umfassen den gesamten lokalen Start- und Endtag.
     const fromTime = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : null;
     const toTime = dateTo ? new Date(`${dateTo}T23:59:59.999`).getTime() : null;
     return orders.filter((entry) => {
@@ -1245,11 +1228,7 @@ function AdminPage() {
   }
 
   async function loadTimeline(orderId) {
-    // Getrennt von selectOrder(), damit ein Live-Update (siehe SSE-useEffect
-    // oben) die Timeline der gerade geoeffneten Bestellung nachladen kann,
-    // ohne setSelectedOrder()/setTimeline([]) erneut auszuloesen - das wuerde
-    // sonst bei jedem Live-Event kurz einen leeren Timeline-Zustand aufblitzen
-    // lassen.
+    // Separates Nachladen verhindert einen leeren Zwischenzustand bei Live-Updates.
     const response = await fetch(`${SHOP_API}/admin/orders/${orderId}/audit`, { credentials: "include" });
     if (response.ok) {
       const audit = await response.json();

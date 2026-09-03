@@ -1,10 +1,4 @@
-"""HTTP-Router (Router-Schicht) des billing-service.
-
-Duenne FastAPI-Endpunkte: validieren/deserialisieren den Request (ueber
-schemas.py), delegieren die eigentliche Arbeit an service.py bzw. die
-PaymentFacade, und serialisieren das Ergebnis zurueck. Enthaelt selbst keine
-Business-Logik.
-"""
+"""HTTP-Endpunkte des Billing-Service."""
 
 from fastapi import APIRouter, HTTPException
 
@@ -23,20 +17,13 @@ router = APIRouter()
 
 @router.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
-    """Einfacher Liveness-/Readiness-Check fuer Docker Compose/Monitoring."""
+    """Liveness- und Readiness-Status."""
     return HealthResponse(service=settings.service_name)
 
 
 @router.get("/payments/{transactionId}/status", response_model=PaymentStatusResponse)
 async def get_payment_status(transactionId: str) -> PaymentStatusResponse:
-    """Fragt synchron den aktuellen Status einer Transaktion ab (Debug-/Admin-Zweck).
-
-    Nutzt denselben Adapter-Retry wie der Saga-Confirm-Pfad in
-    handle_billing_message(); eine dauerhaft fehlschlagende Statusabfrage
-    fuehrt hier (mangels eigenem try/except) zu einer unbehandelten
-    PaymentFacadeError, die vom generischen Exception-Handler in
-    problem_details.py als 500 beantwortet wird.
-    """
+    """Liest den aktuellen Status einer Transaktion."""
     facade = get_payment_facade(settings.payment_provider)
     result = facade.get_status(transactionId)
     return PaymentStatusResponse(
@@ -48,14 +35,7 @@ async def get_payment_status(transactionId: str) -> PaymentStatusResponse:
 
 @router.post("/webhooks/payment-stub", response_model=AsyncPaymentWebhookResponse)
 async def receive_async_payment_webhook(request: AsyncPaymentWebhookRequest) -> AsyncPaymentWebhookResponse:
-    """Empfaengt den asynchronen Webhook-Callback des PayPal-Stubs.
-
-    Wird ausschliesslich intern vom PayPalAdapter selbst aufgerufen (siehe
-    _schedule_webhook()/_send_webhook() in payment/adapters.py), simuliert
-    also den Callback, den ein echter Zahlungsanbieter nach verzoegerter
-    Zahlungsbestaetigung schicken wuerde. Uebersetzt das Ergebnis in das
-    passende billing.payment.succeeded/.failed-Saga-Event.
-    """
+    """Verarbeitet den Callback des PayPal-Stubs."""
     status = request.status.upper()
     if status not in {"SUCCEEDED", "FAILED"}:
         raise HTTPException(status_code=400, detail="Unsupported async payment webhook status")

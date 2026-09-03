@@ -1,4 +1,4 @@
-"""Pydantic-Schemas (Request-/Response-Modelle) des shop-service."""
+"""API-Datenmodelle des Shop-Service."""
 
 from datetime import datetime
 from typing import Literal
@@ -7,16 +7,14 @@ from pydantic import BaseModel, Field
 
 
 class HealthResponse(BaseModel):
-    """Antwort des /health-Endpunkts (fuer Docker-Healthchecks/Monitoring)."""
+    """Antwort des Health-Endpunkts."""
 
     status: str = "ok"
     service: str
 
 
 class OrderItem(BaseModel):
-    """Eine rohe Bestellposition aus dem Checkout-Request (nur productId +
-    Menge - Preise werden serverseitig nachgeschlagen, siehe
-    enrich_items_from_products())."""
+    """Bestellposition ohne clientseitige Preisdaten."""
 
     productId: str
     quantity: int = Field(ge=1)
@@ -38,10 +36,7 @@ class Address(BaseModel):
 
 
 class PaymentSelection(BaseModel):
-    """Zahlungsauswahl aus dem Checkout - `scenario` steuert gezielte
-    Testszenarien
-    (happy_path, warehouse_commit_failed, out_of_stock, ...) end-to-end
-    durch die ganze Saga."""
+    """Zahlungsauswahl und optionales Testszenario."""
 
     provider: str
     currency: str = "EUR"
@@ -56,7 +51,7 @@ class PaymentSelection(BaseModel):
 
 
 class CreateOrderRequest(BaseModel):
-    """Body fuer POST /orders (Checkout-Formular)."""
+    """Neue Bestellung aus dem Checkout."""
 
     customerId: str | None = None
     customer: Customer
@@ -67,9 +62,7 @@ class CreateOrderRequest(BaseModel):
 
 
 class ProductResponse(BaseModel):
-    """Produkt inkl. optionaler Lagerbestand-Felder (None/UNKNOWN, falls
-    warehouse-service beim Aufruf nicht erreichbar war, siehe
-    fetch_warehouse_stock())."""
+    """Produkt mit optionalen Bestandsdaten."""
 
     id: str
     name: str
@@ -90,7 +83,7 @@ class ProductResponse(BaseModel):
 
 
 class ProductUpdateRequest(BaseModel):
-    """Body fuer PUT /admin/products/{productId}."""
+    """Aenderung der Produktstammdaten."""
 
     name: str = Field(min_length=1)
     year: str = Field(min_length=1)
@@ -105,23 +98,21 @@ class ProductUpdateRequest(BaseModel):
 
 
 class ProductCreateRequest(ProductUpdateRequest):
-    """Body fuer POST /admin/products - erweitert ProductUpdateRequest um die
-    initialen Lagerbestand-Felder, die beim Anlegen zusaetzlich an
-    warehouse-service durchgereicht werden (siehe admin_create_product())."""
+    """Neues Produkt mit Anfangsbestand."""
 
     quantityOnHand: int = Field(default=0, ge=0)
     location: str | None = "RETRO-A1"
 
 
 class StockUpdateRequest(BaseModel):
-    """Body fuer PATCH /admin/products/{productId}/stock."""
+    """Aenderung eines Lagerbestands."""
 
     quantityOnHand: int = Field(ge=0)
     location: str | None = None
 
 
 class OrderResponse(BaseModel):
-    """Oeffentliche Sicht auf eine Bestellung (GET/POST /orders/...)."""
+    """Oeffentliche Sicht auf eine Bestellung."""
 
     orderId: str
     correlationId: str
@@ -135,8 +126,7 @@ class OrderResponse(BaseModel):
 
 
 class PaymentConfirmationRequest(BaseModel):
-    """Body fuer POST /orders/{orderId}/payment-confirmation (Kunde bestaetigt
-    oder storniert eine externe Zahlung, z.B. nach PayPal-Redirect)."""
+    """Bestaetigung oder Abbruch einer externen Zahlung."""
 
     outcome: Literal["approved", "cancelled"]
 
@@ -152,8 +142,7 @@ class AdminSessionResponse(BaseModel):
 
 
 class AdminOrderResponse(BaseModel):
-    """Vollstaendige Bestellsicht fuer das Admin-Dashboard (mehr Felder als
-    OrderResponse, u.a. items/payment/Zeitstempel fuer die Uebersichtstabelle)."""
+    """Vollstaendige Bestellsicht des Admin-Dashboards."""
 
     orderId: str
     correlationId: str
@@ -174,8 +163,7 @@ class AdminOrderResponse(BaseModel):
 
 
 class AdminAuditResponse(BaseModel):
-    """Antwort von GET /admin/orders/{orderId}/audit - die vollstaendige
-    Audit-Snapshot-Timeline einer Bestellung ueber alle Services hinweg."""
+    """Audit-Timeline einer Bestellung."""
 
     orderId: str
     snapshots: list[dict]

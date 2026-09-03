@@ -1,19 +1,4 @@
-"""In-Process Pub/Sub fuer die Echtzeit-Aktualisierung des Admin-Dashboards.
-
-Zustandsaenderungen einer Bestellung passieren im RabbitMQ-Consumer-Thread
-(handle_saga_message in saga.py, synchroner Code in einem eigenen
-threading.Thread), die SSE-Verbindungen laufen dagegen im asyncio-Event-Loop
-von FastAPI/Uvicorn. Dieses Modul ist die duenne, thread-sichere Bruecke
-dazwischen:
-
-- publish() wird aus dem Consumer-Thread aufgerufen (Producer).
-- subscribe()/unsubscribe() werden aus dem SSE-Endpunkt in routes.py aufgerufen,
-  je einmal pro offener Browser-Verbindung.
-
-queue.Queue ist bereits von Haus aus thread-safe, daher reicht ein einfaches
-Set aus Queues plus ein Lock fuer das Set selbst - keine zusaetzliche
-Locking-Logik fuer put()/get() noetig.
-"""
+"""Thread-sicheres Pub/Sub fuer die SSE-Verbindungen des Admin-Dashboards."""
 import queue
 import threading
 from typing import Any
@@ -21,16 +6,12 @@ from typing import Any
 _subscribers: set[queue.Queue] = set()
 _lock = threading.Lock()
 
-# Begrenzte Queue-Groesse pro Client: ein sehr langsamer oder haengender
-# Browser-Tab soll den Producer (den Saga-Consumer-Thread!) niemals
-# blockieren koennen. Laeuft eine Queue voll, werden neue Events fuer genau
-# diesen einen Client verworfen (siehe publish()) - alle anderen Clients und
-# vor allem die eigentliche Saga-Verarbeitung sind davon nicht betroffen.
+# Begrenzte Queue pro Client verhindert blockierende Produzenten.
 _MAX_QUEUE_SIZE = 50
 
 
 def subscribe() -> "queue.Queue[dict[str, Any]]":
-    """Registriert einen neuen Abonnenten (eine offene SSE-Verbindung)."""
+    """Registriert eine SSE-Verbindung."""
     q: "queue.Queue[dict[str, Any]]" = queue.Queue(maxsize=_MAX_QUEUE_SIZE)
     with _lock:
         _subscribers.add(q)
@@ -38,26 +19,18 @@ def subscribe() -> "queue.Queue[dict[str, Any]]":
 
 
 def unsubscribe(q: "queue.Queue[dict[str, Any]]") -> None:
-    """Meldet einen Abonnenten ab (Verbindung geschlossen/Client weg)."""
+    """Entfernt eine SSE-Verbindung."""
     with _lock:
         _subscribers.discard(q)
 
 
 def publish(event: dict[str, Any]) -> None:
-    """Verteilt ein Event an alle aktuell verbundenen Admin-Dashboards.
-
-    Wird synchron aus dem Saga-Consumer-Thread aufgerufen - darf deshalb
-    niemals blockieren oder eine Exception werfen, die die eigentliche
-    Nachrichtenverarbeitung stoeren wuerde.
-    """
+    """Verteilt ein Ereignis ohne Blockieren an alle Abonnenten."""
     with _lock:
         subscribers = list(_subscribers)
     for q in subscribers:
         try:
             q.put_nowait(event)
         except queue.Full:
-            # Client haengt/liest nicht schnell genug - Event fuer ihn
-            # verwerfen statt den Producer-Thread zu blockieren. Der Client
-            # bekommt beim naechsten manuellen Reload trotzdem den
-            # aktuellen Stand ueber die normalen REST-Endpunkte.
+            # Ereignis fuer einen langsamen Client verwerfen.
             pass

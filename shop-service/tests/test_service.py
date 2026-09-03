@@ -19,9 +19,7 @@ from src.service import (
 
 
 class _FakeRequest:
-    """Duck-typed Ersatz fuer fastapi.Request - die getesteten Funktionen
-    rufen nur request.headers.get()/request.cookies.get() auf, ein einfaches
-    dict reicht dafuer vollstaendig aus."""
+    """Minimaler Request-Ersatz mit Headern und Cookies."""
 
     def __init__(self, headers: dict | None = None, cookies: dict | None = None) -> None:
         self.headers = headers or {}

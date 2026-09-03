@@ -1,30 +1,11 @@
-"""Service-Schicht des warehouse-service: RabbitMQ-Command-Handling (Saga).
-
-Enthaelt die Business-Logik fuer die drei Bestand-Commands, die
-warehouse-service ueber RabbitMQ konsumiert (siehe lifespan() in main.py).
-Die synchronen REST-Endpunkte fuer Lagerbestand (routes.py) sind dagegen so
-einfach (direkte CRUD-Weiterleitung an die Repository-Schicht database.py),
-dass sie keine eigene Service-Funktion brauchen.
-"""
+"""Command-Verarbeitung des Warehouse-Service."""
 
 from .database import cancel_reservation, commit_reservation, reserve_stock
 from .messaging import build_message, publish_message
 
 
 def handle_warehouse_message(message: dict) -> None:
-    """Verteilt eingehende Bestand-Commands auf die passende Verarbeitung.
-
-    Verarbeitete Nachrichtentypen:
-      - warehouse.cancel.requested: Reservierung stornieren (Kompensation
-        bei abgelehnter Zahlung).
-      - warehouse.commit.requested: Reservierung final ausbuchen (nach
-        erfolgreicher Zahlung) - inkl. gezieltem Testszenario
-        "warehouse_commit_failed" fuer die Refund-Kompensation.
-      - warehouse.reserve.requested: Bestand pruefen und reservieren -
-        inkl. gezieltem Testszenario "out_of_stock".
-    Jeder Zweig publiziert am Ende genau EIN Ergebnis-Event zurueck an die
-    Shop-Saga.
-    """
+    """Verarbeitet Reservierungs-, Commit- und Storno-Commands."""
     if message["type"] == "warehouse.cancel.requested":
         payload = message.get("payload", {})
         cancelled = cancel_reservation(payload["orderId"])
@@ -44,10 +25,7 @@ def handle_warehouse_message(message: dict) -> None:
     if message["type"] == "warehouse.commit.requested":
         payload = message.get("payload", {})
         scenario = payload.get("scenario", "happy_path")
-        # Gezieltes Testszenario: tut so, als wuerde das finale Verbuchen der
-        # Reservierung fehlschlagen, OHNE commit_reservation() ueberhaupt
-        # aufzurufen - damit laesst sich die Refund-Kompensation der Saga
-        # (Zahlung wurde bereits bestaetigt) reproduzierbar durchspielen.
+        # Fehlerszenario fuer die Refund-Kompensation.
         if scenario == "warehouse_commit_failed":
             event = build_message(
                 "warehouse.commit.failed",
@@ -109,11 +87,7 @@ def handle_warehouse_message(message: dict) -> None:
     scenario = payload.get("scenario", "happy_path")
     has_stock, reason_code = reserve_stock(order_id, items)
     if scenario == "out_of_stock":
-        # Gezieltes Testszenario: reserve_stock() lief regulaer (und hat
-        # ggf. bereits reserviert), wird hier aber erzwungen wieder
-        # storniert und als fehlgeschlagen gemeldet - reproduzierbarer
-        # Weg, den "Artikel nicht verfuegbar"-Pfad der Saga zu testen, ohne
-        # den tatsaechlichen Lagerbestand vorher leerraeumen zu muessen.
+        # Fehlerszenario ohne Aenderung des dauerhaften Lagerbestands.
         cancel_reservation(order_id)
         has_stock = False
         reason_code = "OUT_OF_STOCK"

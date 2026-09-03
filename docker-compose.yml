@@ -93,8 +93,6 @@ services:
     ports:
       - "8002:8002"
     depends_on:
-      postgres:
-        condition: service_healthy
       rabbitmq:
         condition: service_healthy
 
@@ -135,7 +133,6 @@ services:
     build: ./frontend
     environment:
       VITE_SHOP_API_URL: http://localhost:8000
-      VITE_AUDIT_API_URL: http://localhost:8004
     ports:
       - "3000:80"
     depends_on:

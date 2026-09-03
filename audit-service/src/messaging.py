@@ -1,10 +1,4 @@
-"""RabbitMQ-Anbindung des audit-service.
-
-Anders als bei den anderen Services gibt es hier kein publish_message() -
-audit-service veroeffentlicht selbst nie Nachrichten, sondern konsumiert nur
-(siehe consume_audit_events() unten, gebunden auf Routing-Key "#" statt auf
-einzelne Event-Typen wie bei den anderen Services).
-"""
+"""RabbitMQ-Consumer des Audit-Service."""
 
 import json
 import logging
@@ -17,10 +11,9 @@ import pika.exceptions
 
 from .config import settings
 
-# Topic-Exchange, ueber den alle Services ihre Events/Commands austauschen.
+# Gemeinsamer Topic-Exchange aller Services.
 EXCHANGE_NAME = "webshop.events"
-# Eigene Queue des audit-service - gebunden auf "#" (siehe queue_bind()
-# unten), bekommt dadurch als einziger Service wirklich JEDE Nachricht.
+# Queue fuer alle Ereignisse und Commands.
 AUDIT_QUEUE_NAME = "audit-service.snapshots"
 
 logger = logging.getLogger(__name__)
@@ -30,22 +23,14 @@ _MAX_RECONNECT_DELAY_SECONDS = 30
 
 
 def _connect_with_retry(stop_event: threading.Event) -> pika.BlockingConnection | None:
-    """Verbindet mit RabbitMQ, mit Backoff-Retry bei Start-/Verbindungsproblemen.
-
-    Gibt None zurueck, wenn stop_event waehrend des Wartens gesetzt wurde
-    (sauberer Shutdown statt Endlosschleife).
-    """
+    """Verbindet mit RabbitMQ und wiederholt Fehler mit Backoff."""
     delay = _INITIAL_RECONNECT_DELAY_SECONDS
     while not stop_event.is_set():
         try:
             parameters = pika.URLParameters(settings.rabbitmq_url)
             return pika.BlockingConnection(parameters)
         except (pika.exceptions.AMQPConnectionError, OSError) as exc:
-            # OSError zusaetzlich: schon die DNS-Aufloesung des RabbitMQ-
-            # Hostnamens (z.B. waehrend eines Container-Neustarts) kann als
-            # roher socket.gaierror durchschlagen, den pika NICHT in
-            # AMQPConnectionError wrapt - ohne diesen Fang stirbt der
-            # Consumer-Thread bei diesem Szenario endgueltig.
+            # pika kapselt DNS-Fehler nicht immer als AMQPConnectionError.
             logger.warning(
                 "RabbitMQ nicht erreichbar (%s), naechster Verbindungsversuch in %ss",
                 exc,
@@ -60,18 +45,7 @@ def consume_audit_events(
         handle_message: Callable[[dict[str, Any]], None],
         stop_event: threading.Event,
 ) -> None:
-    """Konsumiert dauerhaft ALLE Nachrichten auf dem Exchange (Routing-Key "#").
-
-    Blockierend - gedacht zum Laufen in einem eigenen Thread (siehe
-    lifespan() in main.py). Fuer jede empfangene Nachricht wird
-    `handle_message(message)` aufgerufen (im Normalbetrieb
-    insert_snapshot_from_message aus database.py); wirft der Handler eine
-    Exception, wird die Nachricht negativ bestaetigt (nack, ohne Requeue)
-    statt den ganzen Consumer abstuerzen zu lassen. `stop_event` erlaubt
-    einen sauberen Shutdown von aussen.
-    """
-    # Aeussere Schleife: baut die Verbindung neu auf, sobald sie einmal
-    # verloren geht (Start-Race, RabbitMQ-Neustart, Netzwerk-Hiccup, ...).
+    """Konsumiert alle Nachrichten blockierend und verbindet bei Ausfall neu."""
     while not stop_event.is_set():
         connection = _connect_with_retry(stop_event)
         if connection is None:
@@ -82,10 +56,7 @@ def consume_audit_events(
             channel = connection.channel()
             channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type="topic", durable=True)
             channel.queue_declare(queue=AUDIT_QUEUE_NAME, durable=True)
-            # routing_key="#" ist bei einem Topic-Exchange der Alles-Platzhalter
-            # (matcht jeden Routing-Key, beliebig viele Wortsegmente) - genau
-            # das macht audit-service zum generischen Event-Sink ohne Wissen
-            # ueber einzelne Nachrichtentypen.
+            # "#" bindet alle Routing-Keys des Topic-Exchange.
             channel.queue_bind(queue=AUDIT_QUEUE_NAME, exchange=EXCHANGE_NAME, routing_key="#")
 
             for method_frame, properties, body in channel.consume(
@@ -105,14 +76,7 @@ def consume_audit_events(
                     logger.exception("Failed to handle audit message")
                     channel.basic_nack(method_frame.delivery_tag, requeue=False)
         except (pika.exceptions.AMQPError, OSError) as exc:
-            # OSError zusaetzlich: aus Konsistenz mit _connect_with_retry() -
-            # falls auch bei bestehender Verbindung ein roher Socket-Fehler
-            # statt einer gewrappten AMQP-Exception durchschlaegt.
-            # AMQPError ist die gemeinsame Basisklasse ALLER pika-Fehler
-            # (Connection- UND Channel-bezogen) - eine schmalere Liste
-            # einzelner Exception-Typen liesse den Consumer-Thread bei einer
-            # nicht explizit gelisteten Variante (z.B. ChannelWrongStateError)
-            # lautlos sterben, ohne sich je wieder zu verbinden.
+            # Verbindungs- und Kanalfehler fuehren zum Neuaufbau der Verbindung.
             if stop_event.is_set():
                 return
             logger.warning("RabbitMQ-Verbindung verloren (%s), verbinde neu...", exc)
